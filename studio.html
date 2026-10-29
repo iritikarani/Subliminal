@@ -560,9 +560,17 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <option value="hi">Hindi</option>
             <option value="hinglish">Hinglish (Hindi + English, in English letters)</option>
           </select>
-          <div class="field-head"><label for="script">Your script (optional)</label></div>
-          <textarea class="text" id="script" data-k="script" rows="5" placeholder="Paste exactly what you say in the recording, in Hindi, English or Hinglish. Each line becomes one caption."></textarea>
-          <p class="help">With a script, the captions use your exact words, timed to your voice. English words stay in English and Hindi words are written in English letters. Long lines are split up.</p>
+          <div class="field-head"><span id="lbl-capsrc">Captions from</span></div>
+          <div class="seg" role="radiogroup" aria-labelledby="lbl-capsrc">
+            <label><input class="vh" type="radio" name="capSource" value="script" data-k="capSource"><span>My script</span></label>
+            <label><input class="vh" type="radio" name="capSource" value="voice" data-k="capSource"><span>My voice (automatic)</span></label>
+          </div>
+          <div class="field" id="scriptBox">
+            <div class="field-head"><label for="script">Your script</label></div>
+            <textarea class="text" id="script" data-k="script" rows="5" placeholder="Paste exactly what you say in the recording, in Hindi, English or Hinglish. Each line becomes one caption."></textarea>
+            <p class="help">The captions use your exact words, timed to your voice. English words stay in English and Hindi words are written in English letters. Long lines are split up.</p>
+          </div>
+          <p class="help" id="voiceNote">The words are written out automatically from your recording. Speech recognition can mishear words; fix any line below, or switch to “My script” for exact words.</p>
           <p class="msg" id="capStatus" role="status">Add your voice recording in step 01. Its words will appear on screen in time with your voice.</p>
           <div class="progress" id="capProgress" hidden><div class="bar"><i id="capBar"></i></div></div>
           <div class="cap-list" id="capList" hidden></div>
@@ -1735,7 +1743,7 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', script: '', extra: [], affSize: 100, titleSize: 100
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', capSource: 'voice', script: '', extra: [], affSize: 100, titleSize: 100
 };
 const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize', 'titleSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
@@ -1753,6 +1761,8 @@ function loadSettings() {
   if (!PALETTES[s.palette]) s.palette = DEFAULTS.palette;
   if (!FONTS[s.font]) s.font = DEFAULTS.font;
   if (!['en', 'hi', 'hinglish'].includes(s.capLang)) s.capLang = DEFAULTS.capLang;
+  if (s.capSource !== 'script' && s.capSource !== 'voice') s.capSource = DEFAULTS.capSource;
+  if (saved.capSource === undefined && s.script.trim()) s.capSource = 'script'; // already pasted a script before the choice existed
   if (saved.textMode === 'none') s.showWords = false;
   s.extra = Array.isArray(s.extra) ? s.extra.filter(x => typeof x === 'string').slice(0, 4) : [];
   if (saved.lenV !== 2) { s.lengthMode = 'once'; s.lenV = 2; } // new default: the video is as long as the recording
@@ -1857,7 +1867,7 @@ function changed(k) {
   if (k === 'voiceTone') applyTone();
   if (k === 'showWords' && S.showWords && media.voiceBase && !media.captions && !capBusy) transcribe();
   if (k === 'capLang' && media.voiceBase && S.showWords) transcribe();
-  if (k === 'script') scriptChanged();
+  if (k === 'script' || k === 'capSource') scriptChanged();
 }
 
 function refreshOutputs() {
@@ -1868,6 +1878,8 @@ function refreshOutputs() {
   $('#gapField').hidden = S.lengthMode === 'once';
   const src = wordsSource();
   $('#capPanel').hidden = !S.showWords; // shown before a recording too, so the language can be picked first
+  $('#scriptBox').hidden = S.capSource !== 'script';
+  $('#voiceNote').hidden = S.capSource !== 'voice';
   $('#affPanel').hidden = !S.showWords || src !== 'lines';
   $('#wordsNote').textContent = !S.showWords ? 'Nothing will show in the middle of the video.'
     : !media.voiceBase ? 'No recording yet, so the lines you type below are shown. When you add a recording, the studio writes out its words and shows them instead, in time with your voice.'
@@ -2318,7 +2330,7 @@ function setCapUI(msg, frac, isErr) {
 }
 function asrFailed() {
   capBusy = false; holdCapWake(false); media.asrFailed = true;
-  if (S.script.trim()) {
+  if (useScript()) {
     buildCaptions(); refreshOutputs();
     setCapUI('The speech model couldn’t load, so your script was timed using the pauses in your voice. Play the preview to check it, or try again with a connection.', null);
     return;
@@ -2348,7 +2360,7 @@ async function transcribe() {
   capBusy = true; capFiles = {}; media.captions = null; media.heard = null; media.asrFailed = false; holdCapWake(true);
   buildCaptions(); // with a script, rough timing from the pauses shows right away; the speech model refines it
   renderCapList(); refreshOutputs();
-  setCapUI(S.script.trim() ? 'Timing your script to your voice…' : 'Getting ready to write out your words…', 0);
+  setCapUI(useScript() ? 'Timing your script to your voice…' : 'Getting ready to write out your words…', 0);
   try {
     const audio = await to16k(base);
     if (job !== capJob) return;
@@ -2390,14 +2402,16 @@ function onAsrMessage(e) {
     media.heard = cleanChunks(m.chunks || [], b ? b.data.length / b.rate : 0);
     buildCaptions(); renderCapList(); refreshOutputs();
     const n = media.captions ? media.captions.length : 0, lines = `${n} line${n === 1 ? '' : 's'}`;
-    if (S.script.trim()) setCapUI(`Matched your script to your voice: ${lines}. Play the preview to check the timing.`, null);
+    if (useScript()) setCapUI(`Matched your script to your voice: ${lines}. Play the preview to check the timing.`, null);
     else setCapUI(n ? `Found ${lines}. They show on screen as you say them. Check them below.` : 'No words were found. Check that the language matches your recording, or paste your script above.', null, !n);
   } else if (m.type === 'error') asrFailed();
 }
-// captions: the script timed to the voice when there is one, otherwise what the speech model heard
+// the script is used when "My script" is chosen and something is pasted
+function useScript() { return S.capSource === 'script' && !!S.script.trim(); }
+// captions: the script timed to the voice, or what the speech model heard
 function buildCaptions() {
   const v = media.voiceBase; if (!v) return;
-  if (S.script.trim()) media.captions = alignScript(S.script, media.heard, v);
+  if (useScript()) media.captions = alignScript(S.script, media.heard, v);
   else if (media.heard) media.captions = media.heard.map(c => ({ s: c.s, e: c.e, text: capRoman ? HG.romanize(c.text) : c.text }));
   else media.captions = null;
 }
@@ -2405,11 +2419,12 @@ let scriptTimer = 0;
 function scriptChanged() {
   clearTimeout(scriptTimer);
   scriptTimer = setTimeout(() => {
-    if (!media.voiceBase || (capBusy && !S.script.trim())) return;
+    if (!media.voiceBase || (capBusy && !useScript())) return;
     buildCaptions(); renderCapList(); refreshOutputs();
     if (!capBusy) {
       const n = media.captions ? media.captions.length : 0;
-      if (S.script.trim()) setCapUI(media.heard ? `Matched your script to your voice: ${n} line${n === 1 ? '' : 's'}.` : `Timed your script using the pauses in your voice: ${n} line${n === 1 ? '' : 's'}.`, null);
+      if (useScript()) setCapUI(media.heard ? `Matched your script to your voice: ${n} line${n === 1 ? '' : 's'}.` : `Timed your script using the pauses in your voice: ${n} line${n === 1 ? '' : 's'}.`, null);
+      else if (S.capSource === 'script') setCapUI(`Paste your script above to use your exact words.${n ? ` Until then, the ${n} line${n === 1 ? '' : 's'} heard in your recording are shown.` : ''}`, null);
       else setCapUI(n ? `Showing the ${n} line${n === 1 ? '' : 's'} heard in your recording.` : 'Press “Write out the words again” to write out your recording.', null);
     }
   }, 400);
