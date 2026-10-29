@@ -14,8 +14,9 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
-To host it for free, turn on GitHub Pages for this repository (Settings → Pages → deploy from
-the default branch, root folder).
+It's published with GitHub Pages at https://iritikarani.github.io/Subliminal/ by
+`.github/workflows/pages.yml`, which redeploys on every push. Pages must be set to deploy from
+**GitHub Actions** (Settings → Pages → Build and deployment → Source).
 
 ## What it does
 
