@@ -2110,12 +2110,54 @@ const ASR_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 // small is noticeably better for Hindi and Hinglish; base is about three times quicker
 const ASR_MODELS = { small: 'onnx-community/whisper-small', base: 'onnx-community/whisper-base' };
 const ASR_WORKER = `
-let asr = null, asrName = '', queue = Promise.resolve();
-async function run({ job, audio, language, model, lib }) {
+let asr = null, asrName = '', banCache = null, queue = Promise.resolve();
+// Hindi speech is sometimes written in Urdu script. For Hindi and Hinglish, find every token whose
+// UTF-8 bytes start an Arabic-script letter (lead bytes D8–DB, DD) so it can never be chosen.
+function arabicTokens(tok) {
+  if (banCache) return banCache;
+  const bs = [];
+  for (let b = 33; b < 127; b++) bs.push(b);
+  for (let b = 161; b < 173; b++) bs.push(b);
+  for (let b = 174; b < 256; b++) bs.push(b);
+  const byteOf = new Map(bs.map(b => [b, b])); let n = 0; // byte-level BPE: character → byte
+  for (let b = 0; b < 256; b++) if (!bs.includes(b)) byteOf.set(256 + n++, b);
+  const vocab = tok && tok.model && tok.model.vocab;
+  if (!vocab) return null; // unknown tokenizer layout: skip the block rather than fail
+  const out = [];
+  for (let id = 0; id < vocab.length; id++) {
+    const v = vocab[id]; if (!v) continue;
+    for (const ch of v) {
+      const b = byteOf.get(ch.codePointAt(0));
+      if (b !== undefined && ((b >= 0xD8 && b <= 0xDB) || b === 0xDD)) { out.push(id); break; }
+    }
+  }
+  return (banCache = Int32Array.from(out));
+}
+// a logits processor list: blocks banned tokens and stops one token repeating over and over
+// (Whisper's "9999…" glitch). Whisper pushes its own processors into this list for every
+// 30 s window, so push replaces an earlier copy instead of piling them up.
+function guard(ban) {
+  const fn = (ids, logits) => {
+    for (let i = 0; i < ids.length; i++) {
+      const d = logits[i].data, row = ids[i], L = row.length;
+      if (ban) for (let k = 0; k < ban.length; k++) d[ban[k]] = -Infinity;
+      if (L >= 4 && row[L - 1] === row[L - 2] && row[L - 2] === row[L - 3] && row[L - 3] === row[L - 4]) d[Number(row[L - 1])] = -Infinity;
+    }
+    return logits;
+  };
+  const list = [fn];
+  list.push = function (p) {
+    const j = this.findIndex(q => q !== fn && q.constructor === p.constructor);
+    if (j >= 0) this.splice(j, 1);
+    return Array.prototype.push.call(this, p);
+  };
+  return list;
+}
+async function run({ job, audio, language, model, lib, noUrdu }) {
   try {
     if (!asr || asrName !== model) {
       if (asr && asr.dispose) { try { await asr.dispose(); } catch (e) { /* already gone */ } }
-      asr = null;
+      asr = null; banCache = null;
       const T = await import(lib);
       T.env.allowLocalModels = false;
       asr = await T.pipeline('automatic-speech-recognition', model, { dtype: 'q8', device: 'wasm', progress_callback: p => self.postMessage({ job, type: 'load', p }) });
@@ -2140,7 +2182,8 @@ async function run({ job, audio, language, model, lib }) {
       },
       end() { done++; inWin = 0; report(); }
     };
-    const out = await asr(audio, { language, task: 'transcribe', return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, streamer });
+    const out = await asr(audio, { language, task: 'transcribe', return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, streamer,
+      logits_processor: guard(noUrdu ? arabicTokens(asr.tokenizer) : null) });
     self.postMessage({ job, type: 'done', chunks: (out && out.chunks) || [] });
   } catch (err) {
     self.postMessage({ job, type: 'error', message: String((err && err.message) || err) });
@@ -2199,14 +2242,16 @@ async function transcribe() {
     if (job !== capJob) return;
     capRoman = S.capLang === 'hinglish';
     const language = capRoman ? 'hi' : S.capLang; // Hinglish: hear it as Hindi, then write it in English letters
-    getAsrWorker().postMessage({ job, audio, language, model: ASR_MODELS[S.asrModel] || ASR_MODELS.small, lib: ASR_LIB }, [audio.buffer]);
+    getAsrWorker().postMessage({ job, audio, language, noUrdu: language === 'hi', model: ASR_MODELS[S.asrModel] || ASR_MODELS.small, lib: ASR_LIB }, [audio.buffer]);
   } catch (e) { if (job === capJob) asrFailed(); }
 }
 function cleanChunks(chunks, dur) {
   const out = [];
   for (const c of chunks) {
-    const text = String(c.text || '').replace(/\[[^\]]*\]|\([^)]*\)|♪/g, '').replace(/\s+/g, ' ').trim();
-    if (!text) continue;
+    const text = String(c.text || '').replace(/\[[^\]]*\]|\([^)]*\)|♪/g, '')
+      .replace(/(.{1,2}?)\1{5,}/gu, '$1') // a runaway one- or two-character repeat ("9999…") becomes one copy
+      .replace(/\s+/g, ' ').trim();
+    if (!/\p{L}/u.test(text)) continue;
     const ts = c.timestamp || [], s = Math.max(0, Number(ts[0]) || 0);
     let e = ts[1] == null ? dur : Number(ts[1]); if (!(e > s)) e = s + 2;
     out.push({ s, e: Math.min(e, Math.max(dur, s + 0.5)), text });
