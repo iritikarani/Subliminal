@@ -507,6 +507,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <input class="text" type="text" id="title" data-k="title" maxlength="80" autocomplete="off" placeholder="No title">
             <button type="button" class="ghost" data-clear="title" aria-label="Remove the title">Remove</button>
           </div>
+          <div class="field-head"><label for="titleSize">Title size</label><output data-out="titleSize" for="titleSize"></output></div>
+          <input type="range" id="titleSize" data-k="titleSize" min="60" max="200" step="5">
         </div>
         <div class="field">
           <label class="field-head" for="subtitle">Small line under the title</label>
@@ -1564,7 +1566,7 @@ function wrapLines(ctx, text, maxW, font) {
 function layoutFor(ctx, S, W, H) {
   const base = Math.min(W * 0.082, H * 0.072);
   const F = FONTS[S.font] || FONTS.serif;
-  const tSize = base * F.scale, sSize = base * 0.3;
+  const tSize = base * F.scale * (S.titleSize || 100) / 100, sSize = base * 0.3;
   const tFont = `${F.italic ? 'italic ' : ''}${F.weight} ${tSize}px ${F.family}`, sFont = `500 ${sSize}px ${SANS}`;
   const maxW = W * 0.82;
   const tl = S.title.trim() ? wrapLines(ctx, S.title.trim(), maxW, tFont) : [];
@@ -1592,7 +1594,7 @@ function layoutFor(ctx, S, W, H) {
 function titleLayer(S, W, H, P, LB) {
   const pad = LB.tSize * 0.7;
   const h = LB.blockH + pad * 2;
-  const key = `title|${W}|${H}|${P.name}|${S.font}|${S.titlePos}|${S.title}|${S.subtitle}|${S.extra.join('\n')}|${VIS.fontGen}`;
+  const key = `title|${W}|${H}|${S.titleSize}|${P.name}|${S.font}|${S.titlePos}|${S.title}|${S.subtitle}|${S.extra.join('\n')}|${VIS.fontGen}`;
   return { c: cached(key, W, h, g => {
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.shadowColor = P.light ? 'rgba(255,255,255,0.85)' : rgba(P.a[0], 0.65);
@@ -1754,9 +1756,9 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'en', asrModel: 'small', extra: [], affSize: 100
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'en', asrModel: 'small', extra: [], affSize: 100, titleSize: 100
 };
-const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize']);
+const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize', 'titleSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
 const FPS = 30, SR = 48000;
 const STORE_KEY = 'subliminal-studio-v1';
@@ -1807,7 +1809,7 @@ function fmtDb(v) { return v === 0 ? '0 dB' : `${v > 0 ? '+' : '−'}${Math.abs(
 function fmtMB(bytes) { const mb = bytes / 1048576; return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`; }
 const OUT = {
   voiceDb: v => fmtDb(v), ambientDb: v => fmtDb(v), musicDb: v => fmtDb(v),
-  gap: v => `${v} s`, fade: v => `${v} s`, photoDim: v => `${Math.round(v * 100)}%`, affSec: v => `${v} s each`, affSize: v => `${v}%`,
+  gap: v => `${v} s`, fade: v => `${v} s`, photoDim: v => `${Math.round(v * 100)}%`, affSec: v => `${v} s each`, affSize: v => `${v}%`, titleSize: v => `${v}%`,
   palette: v => PALETTES[v].name
 };
 function slug(s) { return (s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').slice(0, 48) || 'subliminal'; }
