@@ -2041,14 +2041,39 @@ async function run({ job, audio, language, model, lib }) {
       asr = await T.pipeline('automatic-speech-recognition', model, { dtype: 'q8', device: 'wasm', progress_callback: p => self.postMessage({ job, type: 'load', p }) });
     }
     self.postMessage({ job, type: 'working' });
-    const out = await asr(audio, { language, task: 'transcribe', return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 });
+    // progress: the pipeline works through 30 s windows that start 20 s apart; inside a window,
+    // timestamp tokens (0.02 s steps from timestamp_begin) show how far it has got
+    const sec = audio.length / 16000, n = sec <= 30 ? 1 : Math.ceil((sec - 30) / 20) + 1;
+    const tb = asr.tokenizer.timestamp_begin;
+    let done = 0, inWin = 0, sent = -1;
+    const report = () => {
+      const winLen = Math.max(1, Math.min(30, sec - 20 * done));
+      const frac = Math.min(0.99, (done + Math.min(1, inWin / winLen)) / n);
+      if (frac - sent >= 0.01) { sent = frac; self.postMessage({ job, type: 'step', frac }); }
+    };
+    const streamer = {
+      put(ids) {
+        const row = ids && ids[0]; if (!row || !row.length) return;
+        const tok = Number(row[row.length - 1]);
+        if (tok >= tb) { inWin = Math.max(inWin, (tok - tb) * 0.02); report(); }
+      },
+      end() { done++; inWin = 0; report(); }
+    };
+    const out = await asr(audio, { language, task: 'transcribe', return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, streamer });
     self.postMessage({ job, type: 'done', chunks: (out && out.chunks) || [] });
   } catch (err) {
     self.postMessage({ job, type: 'error', message: String((err && err.message) || err) });
   }
 }
 self.onmessage = e => { queue = queue.then(() => run(e.data)); };`;
-let asrWorker = null, capJob = 0, capBusy = false, capFiles = {};
+let asrWorker = null, capJob = 0, capBusy = false, capFiles = {}, capStarted = 0, capWake = null;
+// keep the screen on while the words are written out; a sleeping phone pauses the work
+async function holdCapWake(on) {
+  try {
+    if (on && !capWake && navigator.wakeLock) capWake = await navigator.wakeLock.request('screen');
+    else if (!on && capWake) { const w = capWake; capWake = null; await w.release(); }
+  } catch (e) { capWake = null; }
+}
 function getAsrWorker() {
   if (asrWorker) return asrWorker;
   const url = URL.createObjectURL(new Blob([ASR_WORKER], { type: 'text/javascript' }));
@@ -2064,7 +2089,7 @@ function setCapUI(msg, frac, isErr) {
   $('#capRun').hidden = !media.voiceBase || capBusy;
 }
 function asrFailed() {
-  capBusy = false; refreshOutputs();
+  capBusy = false; holdCapWake(false); refreshOutputs();
   setCapUI('Couldn’t write out the words. Check your internet connection (the speech model downloads the first time), then try again.', null, true);
 }
 async function to16k(v) {
@@ -2086,7 +2111,7 @@ async function to16k(v) {
 async function transcribe() {
   if (!media.voiceBase) return;
   const job = ++capJob, base = media.voiceBase;
-  capBusy = true; capFiles = {}; media.captions = null; renderCapList(); refreshOutputs();
+  capBusy = true; capFiles = {}; media.captions = null; renderCapList(); refreshOutputs(); holdCapWake(true);
   setCapUI('Getting ready to write out your words…', 0);
   try {
     const audio = await to16k(base);
@@ -2113,9 +2138,14 @@ function onAsrMessage(e) {
     let lo = 0, to = 0; for (const k in capFiles) { lo += capFiles[k].loaded; to += capFiles[k].total; }
     if (to > 1e6) setCapUI(`Downloading the speech model (first time only) · ${fmtMB(lo)} of ${fmtMB(to)}`, lo / to);
   } else if (m.type === 'working') {
-    setCapUI('Listening to your recording and writing out the words. This can take about as long as the recording…', null);
+    capStarted = performance.now();
+    setCapUI('Writing out the words · 0%. Keep this page open.', 0);
+  } else if (m.type === 'step') {
+    const el = (performance.now() - capStarted) / 1000, f = m.frac;
+    const left = f > 0.05 ? ` · about ${fmtTime(el / f - el)} left` : '';
+    setCapUI(`Writing out the words · ${Math.floor(f * 100)}%${left}. Keep this page open.`, f);
   } else if (m.type === 'done') {
-    capBusy = false;
+    capBusy = false; holdCapWake(false);
     const b = media.voiceBase;
     media.captions = cleanChunks(m.chunks || [], b ? b.data.length / b.rate : 0);
     renderCapList(); refreshOutputs();
@@ -2170,7 +2200,7 @@ async function onVoiceFile(file) {
     $('#voiceStatus').textContent = 'Voice loaded.';
     await applyTone();
     $('#voiceRemove').hidden = false;
-    if (S.showWords) transcribe(); else { capJob++; capBusy = false; renderCapList(); setCapUI('Tick “Show affirmations on the video” to write out your words.'); }
+    if (S.showWords) transcribe(); else { capJob++; capBusy = false; holdCapWake(false); renderCapList(); setCapUI('Tick “Show affirmations on the video” to write out your words.'); }
   } catch (e) {
     err.textContent = e && e.message === 'silent' ? 'That recording is silent. Pick a file with your voice on it.' : 'Couldn’t read that file. Try an MP3, M4A, WAV, or a video with sound.';
     err.hidden = false; $('#voiceStatus').textContent = '';
@@ -2191,7 +2221,7 @@ async function onMusicFile(file) {
 }
 function removeVoice() {
   if (P.playing) stopPreview();
-  toneJob++; capJob++; capBusy = false;
+  toneJob++; capJob++; capBusy = false; holdCapWake(false);
   media.voiceBase = null; media.voice = null; media.voiceName = ''; media.captions = null;
   calcEngine.setVoice(null); if (previewEngine) previewEngine.setVoice(null);
   $('#voiceEmpty').hidden = false; $('#voiceFull').hidden = true; $('#voiceRemove').hidden = true; $('#voiceFile').value = '';
