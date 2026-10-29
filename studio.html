@@ -581,7 +581,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
           <div class="progress" id="capProgress" hidden><div class="bar"><i id="capBar"></i></div></div>
           <div class="cap-list" id="capList" hidden></div>
           <div class="actions"><button type="button" class="ghost" id="capRun" hidden>Write out the words again</button></div>
-          <p class="help">The words are worked out on this device and your recording isn't uploaded. The first time, your browser downloads a speech model (about 100 MB) and keeps it for next time. Check the lines and fix any mistakes; the time is where each line starts in your recording.</p>
+          <p class="help">The words are worked out on this device and your recording isn't uploaded. The first time, your browser downloads a speech model (about 250 MB, so use Wi-Fi) and keeps it for next time. On a phone, writing out the words can take a few times longer than the recording. Check the lines and fix any mistakes; the time is where each line starts in your recording.</p>
         </div>
         <div class="field" id="affPanel">
           <div class="field-head"><label for="affirm">Your lines</label><span class="val">one per line</span></div>
@@ -2099,7 +2099,7 @@ const HG = (() => {
 
 /* ---------- Words from the recording: Whisper speech recognition runs in a worker on this device ---------- */
 const ASR_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
-const ASR_MODEL = 'onnx-community/whisper-base';
+const ASR_MODEL = 'onnx-community/whisper-small'; // noticeably better than base for Hindi and Hinglish
 const ASR_WORKER = `
 let asr = null, queue = Promise.resolve();
 async function run({ job, audio, language, model, lib }) {
