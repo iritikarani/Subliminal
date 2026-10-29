@@ -547,12 +547,15 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
         <div class="field">
           <div class="field-head"><span>Affirmations in the middle</span></div>
           <label class="check"><input type="checkbox" data-k="showWords"> Show affirmations on the video</label>
+          <div class="field-head"><label for="affSize">Text size</label><output data-out="affSize" for="affSize"></output></div>
+          <input type="range" id="affSize" data-k="affSize" min="60" max="200" step="5">
           <p class="help" id="wordsNote"></p>
         </div>
         <div class="field" id="capPanel">
           <div class="field-head"><label for="capLang">Language you speak in the recording</label></div>
           <select class="text" id="capLang" data-k="capLang">
             <option value="en">English</option>
+            <option value="hinglish">Hinglish (Hindi + English, in English letters)</option>
             <option value="hi">Hindi</option>
             <option value="ur">Urdu</option>
             <option value="bn">Bengali</option>
@@ -1649,9 +1652,9 @@ function hasText(S) {
 }
 function affLayer(text, S, W, P, LB) {
   const F = LB.F.affFallback ? FONTS[LB.F.affFallback] : LB.F;
-  const size = LB.base * 0.6 * Math.min(1, F.scale);
+  const size = LB.base * 0.6 * Math.min(1, F.scale) * (S.affSize || 100) / 100;
   const font = `${F.italicAff ? 'italic ' : ''}500 ${size}px ${F.family}`;
-  const key = `aff|${W}|${LB.base}|${P.name}|${S.font}|${text}|${VIS.fontGen}`;
+  const key = `aff|${W}|${LB.base}|${S.affSize}|${P.name}|${S.font}|${text}|${VIS.fontGen}`;
   const probe = VIS.cache.get(key);
   if (probe) return probe;
   const ctx0 = makeCanvas(1, 1).getContext('2d');
@@ -1746,9 +1749,9 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'en', extra: []
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'en', extra: [], affSize: 100
 };
-const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec']);
+const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
 const FPS = 30, SR = 48000;
 const STORE_KEY = 'subliminal-studio-v1';
@@ -1798,7 +1801,7 @@ function fmtDb(v) { return v === 0 ? '0 dB' : `${v > 0 ? '+' : '−'}${Math.abs(
 function fmtMB(bytes) { const mb = bytes / 1048576; return mb >= 100 ? `${Math.round(mb)} MB` : `${mb.toFixed(1)} MB`; }
 const OUT = {
   voiceDb: v => fmtDb(v), ambientDb: v => fmtDb(v), musicDb: v => fmtDb(v),
-  gap: v => `${v} s`, fade: v => `${v} s`, photoDim: v => `${Math.round(v * 100)}%`, affSec: v => `${v} s each`,
+  gap: v => `${v} s`, fade: v => `${v} s`, photoDim: v => `${Math.round(v * 100)}%`, affSec: v => `${v} s each`, affSize: v => `${v}%`,
   palette: v => PALETTES[v].name
 };
 function slug(s) { return (s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').slice(0, 48) || 'subliminal'; }
@@ -1876,7 +1879,7 @@ function refreshOutputs() {
   $('#minutesBox').hidden = S.lengthMode !== 'minutes' && !!media.voice;
   $('#gapField').hidden = S.lengthMode === 'once';
   const src = wordsSource();
-  $('#capPanel').hidden = !S.showWords || !media.voiceBase;
+  $('#capPanel').hidden = !S.showWords; // shown before a recording too, so the language can be picked first
   $('#affPanel').hidden = !S.showWords || src !== 'lines';
   $('#wordsNote').textContent = !S.showWords ? 'Nothing will show in the middle of the video.'
     : !media.voiceBase ? 'No recording yet, so the lines you type below are shown. When you add a recording, the studio writes out its words and shows them instead, in time with your voice.'
@@ -2028,6 +2031,72 @@ async function applyTone() {
   if (was) startPreview();
 }
 
+// Devanagari → Hinglish (Hindi written in English letters, the way people type it)
+const HG = (() => {
+  const CONS = {
+    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'n', 'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
+    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n', 'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
+    'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm', 'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
+    'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h', 'ळ': 'l',
+    'क़': 'q', 'ख़': 'kh', 'ग़': 'g', 'ज़': 'z', 'फ़': 'f', 'ड़': 'r', 'ढ़': 'rh', 'य़': 'y'
+  };
+  const NUKTA = { 'क': 'क़', 'ख': 'ख़', 'ग': 'ग़', 'ज': 'ज़', 'फ': 'फ़', 'ड': 'ड़', 'ढ': 'ढ़', 'य': 'य़' };
+  const VOW = { 'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'ऑ': 'o', 'ऍ': 'e' };
+  const MATRA = { 'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri', 'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ॉ': 'o', 'ॅ': 'e' };
+  const LABIAL = new Set(['p', 'ph', 'b', 'bh', 'm', 'f']);
+  const DEV = /[ऀ-ॿ]/;
+
+  function word(w) {
+    // split into aksharas: { c: consonant, v: vowel ('a' inherent, '' after virama), n: nasal }
+    const t = [];
+    for (let i = 0; i < w.length; i++) {
+      let ch = w[i];
+      if (w[i + 1] === '़' && NUKTA[ch]) { ch = NUKTA[ch]; i++; }
+      if (CONS[ch] !== undefined) t.push({ c: CONS[ch], v: 'a', inh: true, n: '' });
+      else if (VOW[ch] !== undefined) t.push({ c: '', v: VOW[ch], inh: false, n: '' });
+      else if (MATRA[ch] !== undefined && t.length) { const k = t[t.length - 1]; k.v = MATRA[ch]; k.inh = false; }
+      else if (ch === '्' && t.length) { const k = t[t.length - 1]; k.v = ''; k.inh = false; }
+      else if ((ch === 'ं' || ch === 'ँ') && t.length) t[t.length - 1].n = 'n';
+      else if (ch === 'ः' && t.length) t[t.length - 1].n = 'h';
+      else if (ch === '़') { /* stray nukta */ }
+      else t.push({ c: ch, v: '', inh: false, n: '', raw: true });
+    }
+    // usual spellings for some clusters: ज्ञ gy (gyaan), च्छ cch (accha), व after a consonant w (vishwas)
+    for (let i = 0; i + 1 < t.length; i++) {
+      if (t[i].v !== '' || t[i].raw || t[i + 1].raw) continue;
+      if (t[i].c === 'j' && t[i + 1].c === 'n') { t[i].c = 'g'; t[i + 1].c = 'y'; }
+      else if (t[i].c === 'ch' && t[i + 1].c === 'chh') { t[i].c = 'c'; t[i + 1].c = 'ch'; }
+      else if (t[i + 1].c === 'v') t[i + 1].c = 'w';
+    }
+    const hasV = k => k.v !== '';
+    // schwa deletion: drop the final inherent "a" (unless it closes a cluster, as in mitra) …
+    const last = t[t.length - 1];
+    if (t.length > 1 && last.inh && !last.n && !(t[t.length - 2].v === '' && !t[t.length - 2].raw)) last.v = '';
+    // … and a medial one between two sounded syllables (VC_CV), scanning right to left
+    for (let i = t.length - 2; i >= 1; i--) {
+      const k = t[i];
+      // a closed syllable before it (zin-da-gi) keeps the schwa
+      if (k.inh && !k.n && k.c && hasV(t[i - 1]) && !t[i - 1].n && t[i + 1].c && hasV(t[i + 1]) && !t[i + 1].raw) k.v = '';
+    }
+    let out = '';
+    t.forEach((k, i) => {
+      out += k.c + k.v;
+      if (k.n === 'n') { const nx = t[i + 1]; out += nx && !nx.raw && LABIAL.has(nx.c) ? 'm' : 'n'; }
+      else out += k.n;
+    });
+    // everyday Hinglish spelling at the end of a word: karnaa → karna, meree → meri, naheen → nahin
+    return out.replace(/aa$/, 'a').replace(/ee$/, 'i').replace(/een$/, 'in');
+  }
+  function romanize(text) {
+    if (!DEV.test(text)) return text;
+    return text
+      .replace(/[०-९]/g, d => String('०१२३४५६७८९'.indexOf(d)))
+      .replace(/[।॥]/g, '.')
+      .replace(/[ऀ-ॿ]+/g, word);
+  }
+  return { romanize };
+})();
+
 /* ---------- Words from the recording: Whisper speech recognition runs in a worker on this device ---------- */
 const ASR_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 const ASR_MODEL = 'onnx-community/whisper-base';
@@ -2066,7 +2135,7 @@ async function run({ job, audio, language, model, lib }) {
   }
 }
 self.onmessage = e => { queue = queue.then(() => run(e.data)); };`;
-let asrWorker = null, capJob = 0, capBusy = false, capFiles = {}, capStarted = 0, capWake = null;
+let asrWorker = null, capJob = 0, capBusy = false, capRoman = false, capFiles = {}, capStarted = 0, capWake = null;
 // keep the screen on while the words are written out; a sleeping phone pauses the work
 async function holdCapWake(on) {
   try {
@@ -2116,7 +2185,9 @@ async function transcribe() {
   try {
     const audio = await to16k(base);
     if (job !== capJob) return;
-    getAsrWorker().postMessage({ job, audio, language: S.capLang, model: ASR_MODEL, lib: ASR_LIB }, [audio.buffer]);
+    capRoman = S.capLang === 'hinglish';
+    const language = capRoman ? 'hi' : S.capLang; // Hinglish: hear it as Hindi, then write it in English letters
+    getAsrWorker().postMessage({ job, audio, language, model: ASR_MODEL, lib: ASR_LIB }, [audio.buffer]);
   } catch (e) { if (job === capJob) asrFailed(); }
 }
 function cleanChunks(chunks, dur) {
@@ -2148,6 +2219,7 @@ function onAsrMessage(e) {
     capBusy = false; holdCapWake(false);
     const b = media.voiceBase;
     media.captions = cleanChunks(m.chunks || [], b ? b.data.length / b.rate : 0);
+    if (capRoman) media.captions.forEach(c => { c.text = HG.romanize(c.text); });
     renderCapList(); refreshOutputs();
     setCapUI(media.captions.length ? `Found ${media.captions.length} line${media.captions.length === 1 ? '' : 's'}. They show on screen as you say them. Check them below.` : 'No words were found. Check that the language matches your recording, or use “My own lines”.', null, !media.captions.length);
   } else if (m.type === 'error') asrFailed();
