@@ -207,6 +207,12 @@ select.text { cursor: pointer; }
 .cap-row { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; align-items: center; }
 .cap-row span { font: 500 12.5px var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
 .cap-row input { padding: 8px 10px; }
+.text-row { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.text-row .text { flex: 1; min-width: 0; }
+.text-row .ghost { padding: 8px 14px; font-size: 14px; flex: none; }
+.extra-list { display: grid; gap: 8px; }
+.extra-list:empty { display: none; }
+.add-line { justify-self: start; }
 
 /* export */
 .export { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; margin-top: 4px; }
@@ -299,6 +305,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <span class="file-info" id="voiceInfo"></span>
           </span>
         </label>
+        <button type="button" class="tiny" id="voiceRemove" hidden>Remove recording</button>
         <p class="err" id="voiceErr" hidden></p>
         <p class="vh" id="voiceStatus" role="status"></p>
 
@@ -489,13 +496,36 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <label class="swatch"><input class="vh" type="radio" name="palette" value="blush" data-k="palette"><span style="background:linear-gradient(135deg,#fff4f8,#ff6f9f)"></span><b class="vh">Blush</b></label>
           </div>
         </div>
+      </section>
+
+      <!-- 05 TEXT -->
+      <section class="step" aria-labelledby="h-text">
+        <div class="step-head"><span class="num">05</span><h2 id="h-text">Text</h2><p>every word on the video</p></div>
         <div class="field">
           <label class="field-head" for="title">Title</label>
-          <input class="text" type="text" id="title" data-k="title" maxlength="80" autocomplete="off">
+          <div class="text-row">
+            <input class="text" type="text" id="title" data-k="title" maxlength="80" autocomplete="off" placeholder="No title">
+            <button type="button" class="ghost" data-clear="title" aria-label="Remove the title">Remove</button>
+          </div>
         </div>
         <div class="field">
           <label class="field-head" for="subtitle">Small line under the title</label>
-          <input class="text" type="text" id="subtitle" data-k="subtitle" maxlength="80" autocomplete="off">
+          <div class="text-row">
+            <input class="text" type="text" id="subtitle" data-k="subtitle" maxlength="80" autocomplete="off" placeholder="No small line">
+            <button type="button" class="ghost" data-clear="subtitle" aria-label="Remove the small line">Remove</button>
+          </div>
+        </div>
+        <div class="field">
+          <div class="field-head"><span id="lbl-extra">More lines under the title</span></div>
+          <div class="extra-list" id="extraList" role="group" aria-labelledby="lbl-extra"></div>
+          <button type="button" class="tiny add-line" id="extraAdd">+ Add a line</button>
+        </div>
+        <div class="field">
+          <label class="field-head" for="handle">Your handle, at the bottom</label>
+          <div class="text-row">
+            <input class="text" type="text" id="handle" data-k="handle" maxlength="40" placeholder="@yourname" autocomplete="off">
+            <button type="button" class="ghost" data-clear="handle" aria-label="Remove the handle">Remove</button>
+          </div>
         </div>
         <div class="field">
           <div class="field-head"><span id="lbl-font">Lettering</span></div>
@@ -515,12 +545,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
           </div>
         </div>
         <div class="field">
-          <div class="field-head"><span id="lbl-text">Words on screen</span></div>
-          <div class="seg" role="radiogroup" aria-labelledby="lbl-text">
-            <label><input class="vh" type="radio" name="textMode" value="captions" data-k="textMode"><span>From my recording</span></label>
-            <label><input class="vh" type="radio" name="textMode" value="affirm" data-k="textMode"><span>My own lines</span></label>
-            <label><input class="vh" type="radio" name="textMode" value="none" data-k="textMode"><span>None</span></label>
-          </div>
+          <div class="field-head"><span>Affirmations in the middle</span></div>
+          <label class="check"><input type="checkbox" data-k="showWords"> Show affirmations on the video</label>
+          <p class="help" id="wordsNote"></p>
         </div>
         <div class="field" id="capPanel">
           <div class="field-head"><label for="capLang">Language you speak in the recording</label></div>
@@ -558,17 +585,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
           <textarea class="text" id="affirm" data-k="affirm" rows="4" placeholder="Type one affirmation per line"></textarea>
           <div class="field-head"><label for="affSec">Time on screen</label><output data-out="affSec" for="affSec"></output></div>
           <input type="range" id="affSec" data-k="affSec" min="3" max="15" step="1">
-          <p class="help">These lines cycle in the middle of the frame. They're examples; replace them with your own.</p>
-        </div>
-        <div class="field">
-          <label class="field-head" for="handle">Your handle (optional)</label>
-          <input class="text" type="text" id="handle" data-k="handle" maxlength="40" placeholder="@yourname" autocomplete="off">
+          <p class="help">These lines cycle in the middle of the frame, one at a time.</p>
         </div>
       </section>
 
-      <!-- 05 EXPORT -->
+      <!-- 06 EXPORT -->
       <section class="step export" aria-labelledby="h-export">
-        <div class="step-head"><span class="num">05</span><h2 id="h-export">Export</h2></div>
+        <div class="step-head"><span class="num">06</span><h2 id="h-export">Export</h2></div>
         <dl class="sum">
           <div><dt>Size</dt><dd id="sumSize"></dd></div>
           <div><dt>Length</dt><dd id="sumLen"></dd></div>
@@ -1538,9 +1561,13 @@ function layoutFor(ctx, S, W, H) {
   const maxW = W * 0.82;
   const tl = S.title.trim() ? wrapLines(ctx, S.title.trim(), maxW, tFont) : [];
   const sl = S.subtitle.trim() ? wrapLines(ctx, S.subtitle.trim().toUpperCase(), maxW, sFont) : [];
-  const tLH = tSize * 1.08, sLH = sSize * 1.6;
+  const A = F.affFallback ? FONTS[F.affFallback] : F, eSize = base * 0.4 * Math.min(1, A.scale);
+  const eFont = `${A.italicAff ? 'italic ' : ''}500 ${eSize}px ${A.family}`;
+  const el = []; for (const x of S.extra) if (x.trim()) el.push(...wrapLines(ctx, x.trim(), maxW, eFont));
+  const tLH = tSize * 1.08, sLH = sSize * 1.6, eLH = eSize * 1.3;
   const gap = tl.length && sl.length ? sSize * 1.1 : 0;
-  const blockH = tl.length * tLH + gap + sl.length * sLH;
+  const gap2 = el.length && (tl.length || sl.length) ? eSize * 0.7 : 0;
+  const blockH = tl.length * tLH + gap + sl.length * sLH + gap2 + el.length * eLH;
   const tall = H > W;
   let top;
   if (S.titlePos === 'top') top = H * (tall ? 0.13 : 0.1);
@@ -1551,13 +1578,13 @@ function layoutFor(ctx, S, W, H) {
   if (S.titlePos === 'bottom') { r0 = H * 0.07; r1 = top - H * 0.03; }
   else { r0 = top + blockH + H * 0.04; r1 = H * (tall ? 0.9 : 0.9); }
   if (!blockH) { r0 = H * 0.08; r1 = H * 0.9; }
-  return { base, F, tSize, sSize, tFont, sFont, tl, sl, tLH, sLH, gap, top, blockH, r0, r1 };
+  return { base, F, tSize, sSize, tFont, sFont, tl, sl, tLH, sLH, gap, eFont, eSize, el, eLH, gap2, top, blockH, r0, r1 };
 }
 
 function titleLayer(S, W, H, P, LB) {
   const pad = LB.tSize * 0.7;
   const h = LB.blockH + pad * 2;
-  const key = `title|${W}|${H}|${P.name}|${S.font}|${S.titlePos}|${S.title}|${S.subtitle}|${VIS.fontGen}`;
+  const key = `title|${W}|${H}|${P.name}|${S.font}|${S.titlePos}|${S.title}|${S.subtitle}|${S.extra.join('\n')}|${VIS.fontGen}`;
   return { c: cached(key, W, h, g => {
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.shadowColor = P.light ? 'rgba(255,255,255,0.85)' : rgba(P.a[0], 0.65);
@@ -1568,6 +1595,12 @@ function titleLayer(S, W, H, P, LB) {
       if ('letterSpacing' in g) g.letterSpacing = `${(LB.sSize * 0.22).toFixed(1)}px`;
       const y0 = pad + LB.tl.length * LB.tLH + LB.gap;
       LB.sl.forEach((line, i) => g.fillText(line, W / 2, y0 + LB.sLH * (i + 0.5)));
+    }
+    if (LB.el.length) {
+      g.font = LB.eFont; g.shadowBlur = LB.eSize * 0.5; g.globalAlpha = 0.92;
+      if ('letterSpacing' in g) g.letterSpacing = '0px';
+      const y1 = pad + LB.tl.length * LB.tLH + LB.gap + LB.sl.length * LB.sLH + LB.gap2;
+      LB.el.forEach((line, i) => g.fillText(line, W / 2, y1 + LB.eLH * (i + 0.5)));
     }
   }), y: LB.top - pad };
 }
@@ -1598,10 +1631,21 @@ function captionAt(S, t) {
   }
   return null;
 }
-function textAt(S, t) { return S.textMode === 'captions' ? captionAt(S, t) : S.textMode === 'affirm' ? affirmationAt(S, t) : null; }
+// with a recording, its own words are shown; without one (or if they can't be written out), the typed lines are
+function wordsSource() {
+  if (!media.voiceBase) return 'lines';
+  if (media.captions && media.captions.length) return 'captions';
+  return capBusy ? '' : 'lines';
+}
+function textAt(S, t) {
+  if (!S.showWords) return null;
+  const src = wordsSource();
+  return src === 'captions' ? captionAt(S, t) : src === 'lines' ? affirmationAt(S, t) : null;
+}
 function hasText(S) {
-  if (S.textMode === 'captions') return !!(media.captions && media.captions.length);
-  return S.textMode === 'affirm' && !!S.affirm.trim();
+  if (!S.showWords) return false;
+  const src = wordsSource();
+  return src === 'lines' ? !!S.affirm.trim() : true;
 }
 function affLayer(text, S, W, P, LB) {
   const F = LB.F.affFallback ? FONTS[LB.F.affFallback] : LB.F;
@@ -1702,7 +1746,7 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, textMode: 'captions', capLang: 'en'
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'en', extra: []
 };
 const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
@@ -1719,6 +1763,8 @@ function loadSettings() {
   if (!DIMS[s.ratio]) s.ratio = DEFAULTS.ratio;
   if (!PALETTES[s.palette]) s.palette = DEFAULTS.palette;
   if (!FONTS[s.font]) s.font = DEFAULTS.font;
+  if (saved.textMode === 'none') s.showWords = false;
+  s.extra = Array.isArray(s.extra) ? s.extra.filter(x => typeof x === 'string').slice(0, 4) : [];
   if (saved.lenV !== 2) { s.lengthMode = 'once'; s.lenV = 2; } // new default: the video is as long as the recording
   return s;
 }
@@ -1819,34 +1865,42 @@ function changed(k) {
   refreshOutputs();
   if (k === 'ratio') layoutMonitor();
   if (k === 'voiceTone') applyTone();
-  if (k === 'textMode' && S.textMode === 'captions' && media.voiceBase && !media.captions && !capBusy) transcribe();
-  if (k === 'capLang' && media.voiceBase && S.textMode === 'captions') transcribe();
+  if (k === 'showWords' && S.showWords && media.voiceBase && !media.captions && !capBusy) transcribe();
+  if (k === 'capLang' && media.voiceBase && S.showWords) transcribe();
 }
 
 function refreshOutputs() {
   $$('[data-out]').forEach(o => { const k = o.dataset.out; o.textContent = OUT[k] ? OUT[k](S[k]) : S[k]; });
-  $('#repeatBox').hidden = S.lengthMode !== 'repeat';
-  $('#minutesBox').hidden = S.lengthMode !== 'minutes';
+  // without a recording the video runs for the set minutes, whatever length mode is chosen
+  $('#repeatBox').hidden = S.lengthMode !== 'repeat' || !media.voice;
+  $('#minutesBox').hidden = S.lengthMode !== 'minutes' && !!media.voice;
   $('#gapField').hidden = S.lengthMode === 'once';
-  $('#capPanel').hidden = S.textMode !== 'captions';
-  $('#affPanel').hidden = S.textMode !== 'affirm';
+  const src = wordsSource();
+  $('#capPanel').hidden = !S.showWords || !media.voiceBase;
+  $('#affPanel').hidden = !S.showWords || src !== 'lines';
+  $('#wordsNote').textContent = !S.showWords ? 'Nothing will show in the middle of the video.'
+    : !media.voiceBase ? 'No recording yet, so the lines you type below are shown. When you add a recording, the studio writes out its words and shows them instead, in time with your voice.'
+    : src === 'captions' ? 'Showing the words from your recording, in time with your voice. You can fix any line below.'
+    : capBusy ? 'Writing out the words from your recording…'
+    : 'The words from your recording aren’t available, so your typed lines below are shown instead.';
+  $$('[data-clear]').forEach(b => { b.hidden = !S[b.dataset.clear].trim(); });
+  $('#extraAdd').hidden = S.extra.length >= 4;
   $('#photoPanel').hidden = S.bg !== 'photo';
   $('#musicLevel').hidden = !media.music;
   $$('[data-preset]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.preset) === S.voiceDb)));
-  const needVoice = S.lengthMode !== 'minutes' && !media.voice;
   const dur = durationSec();
-  $('#lenOut').textContent = needVoice ? 'Add a voice first' : fmtTime(dur);
-  $('#cycleNote').textContent = !media.voice ? 'The length follows your recording once you add it.'
+  $('#lenOut').textContent = fmtTime(dur);
+  $('#cycleNote').textContent = !media.voice ? (S.lengthMode === 'minutes' ? 'The voice loops to fill these minutes once you add a recording.' : 'No recording yet, so the video runs for the minutes set here. When you add a recording, the length follows it instead.')
     : S.lengthMode === 'once' ? `The video plays your recording once, with nothing repeated: ${fmtTime(calcEngine.cycle(S).playLen / SR)} at this speed${media.voice !== media.voiceBase ? ', including a short echo fade at the end' : ''}.`
     : `One pass of your voice lasts ${fmtTime(calcEngine.cycle(S).C / SR)} at this speed and pause.`;
   const [W, H] = dims();
   const bytes = (videoBitrate() + 160000) * dur / 8;
   $('#sumSize').textContent = `${W} × ${H}`;
-  $('#sumLen').textContent = needVoice ? '—' : fmtTime(dur);
-  $('#sumFile').textContent = needVoice ? 'MP4' : `MP4 · ≈ ${fmtMB(bytes)}`;
-  $('#spec').textContent = `${S.ratio} · ${W} × ${H} · ${needVoice ? 'length set by your voice' : fmtTime(dur)}`;
+  $('#sumLen').textContent = fmtTime(dur);
+  $('#sumFile').textContent = `MP4 · ≈ ${fmtMB(bytes)}`;
+  $('#spec').textContent = `${S.ratio} · ${W} × ${H} · ${fmtTime(dur)}`;
   $('#ratioTag').textContent = S.ratio;
-  const long = !needVoice && dur > 30 * 60;
+  const long = dur > 30 * 60;
   $('#longWarn').hidden = !long;
   $('#seek').max = Math.max(1, dur).toFixed(1);
   if (!P.playing) updateTransport(Math.min(P.pausedT, dur));
@@ -2010,7 +2064,7 @@ function setCapUI(msg, frac, isErr) {
   $('#capRun').hidden = !media.voiceBase || capBusy;
 }
 function asrFailed() {
-  capBusy = false;
+  capBusy = false; refreshOutputs();
   setCapUI('Couldn’t write out the words. Check your internet connection (the speech model downloads the first time), then try again.', null, true);
 }
 async function to16k(v) {
@@ -2115,7 +2169,8 @@ async function onVoiceFile(file) {
     $('#voiceName').textContent = file.name;
     $('#voiceStatus').textContent = 'Voice loaded.';
     await applyTone();
-    if (S.textMode === 'captions') transcribe(); else { capJob++; capBusy = false; renderCapList(); setCapUI('Choose “From my recording” to show your words on screen.'); }
+    $('#voiceRemove').hidden = false;
+    if (S.showWords) transcribe(); else { capJob++; capBusy = false; renderCapList(); setCapUI('Tick “Show affirmations on the video” to write out your words.'); }
   } catch (e) {
     err.textContent = e && e.message === 'silent' ? 'That recording is silent. Pick a file with your voice on it.' : 'Couldn’t read that file. Try an MP3, M4A, WAV, or a video with sound.';
     err.hidden = false; $('#voiceStatus').textContent = '';
@@ -2133,6 +2188,29 @@ async function onMusicFile(file) {
   } catch (e) {
     err.textContent = 'Couldn’t read that music file. Try an MP3, M4A or WAV.'; err.hidden = false;
   } finally { refreshOutputs(); }
+}
+function removeVoice() {
+  if (P.playing) stopPreview();
+  toneJob++; capJob++; capBusy = false;
+  media.voiceBase = null; media.voice = null; media.voiceName = ''; media.captions = null;
+  calcEngine.setVoice(null); if (previewEngine) previewEngine.setVoice(null);
+  $('#voiceEmpty').hidden = false; $('#voiceFull').hidden = true; $('#voiceRemove').hidden = true; $('#voiceFile').value = '';
+  $('#voiceStatus').textContent = 'Recording removed.';
+  renderCapList(); setCapUI('Add your voice recording in step 01. Its words will appear on screen in time with your voice.');
+  refreshOutputs();
+}
+function renderExtra() {
+  const box = $('#extraList'); box.textContent = '';
+  S.extra.forEach((x, i) => {
+    const row = document.createElement('div'); row.className = 'text-row';
+    const inp = document.createElement('input'); inp.className = 'text'; inp.type = 'text'; inp.maxLength = 80; inp.value = x;
+    inp.placeholder = 'Type a line'; inp.autocomplete = 'off'; inp.setAttribute('aria-label', `Extra line ${i + 1}`);
+    inp.addEventListener('input', () => { S.extra[i] = inp.value; changed('extra'); });
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+    rm.setAttribute('aria-label', `Remove extra line ${i + 1}`);
+    rm.addEventListener('click', () => { S.extra.splice(i, 1); renderExtra(); changed('extra'); });
+    row.append(inp, rm); box.append(row);
+  });
 }
 function removeMusic() {
   media.music = null; media.musicName = '';
@@ -2321,8 +2399,8 @@ async function createOutput(audioOnly) {
   if (exporting) return;
   const msg = $('#exportMsg'); msg.hidden = true; msg.classList.remove('err');
   const snap = JSON.parse(JSON.stringify(S));
-  if (snap.lengthMode !== 'minutes' && !media.voice) {
-    msg.textContent = 'Add a voice recording first, or switch Video length to “Set minutes” for a video without a voice.';
+  if (snap.showWords && media.voiceBase && capBusy) {
+    msg.textContent = 'The words from your recording are still being written out. Wait for them to finish, or untick “Show affirmations on the video” in step 05.';
     msg.classList.add('err'); msg.hidden = false; return;
   }
   stopPreview();
@@ -2418,6 +2496,14 @@ function boot() {
   wireDrop('#photoDrop', '#photoFile', onPhotoFile);
   $('#musicRemove').addEventListener('click', removeMusic);
   $('#capRun').addEventListener('click', transcribe);
+  $('#voiceRemove').addEventListener('click', removeVoice);
+  $$('[data-clear]').forEach(b => b.addEventListener('click', () => { setValue(b.dataset.clear, ''); $('#' + b.dataset.clear).focus(); }));
+  $('#extraAdd').addEventListener('click', () => {
+    if (S.extra.length >= 4) return;
+    S.extra.push(''); renderExtra(); changed('extra');
+    const ins = $$('#extraList input'); if (ins.length) ins[ins.length - 1].focus();
+  });
+  renderExtra();
   $('#playBtn').addEventListener('click', () => { P.playing ? stopPreview() : startPreview(); });
   const seek = $('#seek');
   seek.addEventListener('pointerdown', () => { P.dragging = true; });
