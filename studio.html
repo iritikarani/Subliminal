@@ -2015,23 +2015,31 @@ async function applyTone() {
   if (was) startPreview();
 }
 
-// Devanagari → Hinglish (Hindi written in English letters, the way people type it)
+// Devanagari → Hinglish (Hindi written in English letters, the way people type it).
+// English words that Whisper writes in Devanagari (रियलिटी) are turned back into English (reality).
 const HG = (() => {
   const CONS = {
     'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'n', 'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
     'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n', 'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
     'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm', 'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v',
     'श': 'sh', 'ष': 'sh', 'स': 's', 'ह': 'h', 'ळ': 'l',
-    'क़': 'q', 'ख़': 'kh', 'ग़': 'g', 'ज़': 'z', 'फ़': 'f', 'ड़': 'r', 'ढ़': 'rh', 'य़': 'y'
+    'क़': 'q', 'ख़': 'kh', 'ग़': 'g', 'ज़': 'z', 'फ़': 'f', 'ड़': 'd', 'ढ़': 'dh', 'य़': 'y'
   };
   const NUKTA = { 'क': 'क़', 'ख': 'ख़', 'ग': 'ग़', 'ज': 'ज़', 'फ': 'फ़', 'ड': 'ड़', 'ढ': 'ढ़', 'य': 'य़' };
   const VOW = { 'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri', 'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'ऑ': 'o', 'ऍ': 'e' };
   const MATRA = { 'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri', 'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ॉ': 'o', 'ॅ': 'e' };
   const LABIAL = new Set(['p', 'ph', 'b', 'bh', 'm', 'f']);
   const DEV = /[ऀ-ॿ]/;
+  // everyday spellings for the most common words
+  const COMMON = {
+    'में': 'mein', 'मैं': 'main', 'है': 'hai', 'हैं': 'hain', 'नहीं': 'nahi', 'नही': 'nahi', 'यह': 'ye', 'ये': 'ye', 'वह': 'wo', 'वो': 'wo',
+    'क्यों': 'kyun', 'क्योंकि': 'kyunki', 'भी': 'bhi', 'ही': 'hi', 'तो': 'toh', 'हूँ': 'hoon', 'हूं': 'hoon', 'मुझे': 'mujhe', 'तुम्हें': 'tumhe',
+    'हम': 'hum', 'तुम': 'tum', 'आप': 'aap', 'कि': 'ki', 'की': 'ki', 'के': 'ke', 'का': 'ka', 'को': 'ko', 'से': 'se', 'पे': 'pe', 'पर': 'par',
+    'ज़्यादा': 'zyada', 'ज्यादा': 'zyada', 'जादा': 'zyada', 'बहुत': 'bahut', 'अब': 'ab', 'सब': 'sab', 'एक': 'ek', 'हाँ': 'haan', 'हां': 'haan',
+    'वाला': 'wala', 'वाली': 'wali', 'वाले': 'wale', 'वक़्त': 'waqt', 'वक्त': 'waqt'
+  };
 
-  function word(w) {
-    // split into aksharas: { c: consonant, v: vowel ('a' inherent, '' after virama), n: nasal }
+  function aksharas(w) {
     const t = [];
     for (let i = 0; i < w.length; i++) {
       let ch = w[i];
@@ -2045,6 +2053,11 @@ const HG = (() => {
       else if (ch === '़') { /* stray nukta */ }
       else t.push({ c: ch, v: '', inh: false, n: '', raw: true });
     }
+    return t;
+  }
+  // a word in English letters, sounded out (used for spelling and for matching English words)
+  function sound(w) {
+    const t = aksharas(w);
     // usual spellings for some clusters: ज्ञ gy (gyaan), च्छ cch (accha), व after a consonant w (vishwas)
     for (let i = 0; i + 1 < t.length; i++) {
       if (t[i].v !== '' || t[i].raw || t[i + 1].raw) continue;
@@ -2055,11 +2068,12 @@ const HG = (() => {
     const hasV = k => k.v !== '';
     // schwa deletion: drop the final inherent "a" (unless it closes a cluster, as in mitra) …
     const last = t[t.length - 1];
-    if (t.length > 1 && last.inh && !last.n && !(t[t.length - 2].v === '' && !t[t.length - 2].raw)) last.v = '';
-    // … and a medial one between two sounded syllables (VC_CV), scanning right to left
+    const cluster = t.length > 1 && t[t.length - 2].v === '' && !t[t.length - 2].raw;
+    if (t.length > 1 && last.inh && !last.n && !(cluster && /^[ryvw]$/.test(last.c))) last.v = '';
+    // … and a medial one between two sounded syllables (VC_CV), scanning right to left;
+    // a closed syllable before it (zin-da-gi) keeps the schwa
     for (let i = t.length - 2; i >= 1; i--) {
       const k = t[i];
-      // a closed syllable before it (zin-da-gi) keeps the schwa
       if (k.inh && !k.n && k.c && hasV(t[i - 1]) && !t[i - 1].n && t[i + 1].c && hasV(t[i + 1]) && !t[i + 1].raw) k.v = '';
     }
     let out = '';
@@ -2068,15 +2082,115 @@ const HG = (() => {
       if (k.n === 'n') { const nx = t[i + 1]; out += nx && !nx.raw && LABIAL.has(nx.c) ? 'm' : 'n'; }
       else out += k.n;
     });
-    // everyday Hinglish spelling at the end of a word: karnaa → karna, meree → meri, naheen → nahin
-    return out.replace(/aa$/, 'a').replace(/ee$/, 'i').replace(/een$/, 'in');
+    return out;
   }
+  // how people type it: long vowels shorten in longer words (tumhaara → tumhara, poora → pura),
+  // and at the end of a word (karnaa → karna, meree → meri, naheen → nahin)
+  function spell(s) {
+    if ((s.match(/[aeiou]+/g) || []).length > 1) s = s.replace(/\Baa/g, 'a').replace(/\Bee/g, 'i').replace(/\Boo/g, 'u');
+    return s.replace(/aa$/, 'a').replace(/ee$/, 'i').replace(/een$/, 'in');
+  }
+
+  /* ---- English words written in Devanagari: match by consonant sounds ---- */
+  // longer words and phrases only: short ones (love, hair, money) sound too much like Hindi words (lav, har, man)
+  const ENGLISH = ('reality,current reality,desired reality,glow up,glowing,glow,subliminal,subliminals,physical,appearance,personality,transform,' +
+    'transformation,transformed,complete,clear,ideal,version,ideal version,best version,favourite,favorite,timeline,confident,confidence,beautiful,pretty,' +
+    'attractive,attraction,gorgeous,stunning,skin,clear skin,glass skin,flawless,complexion,features,jawline,cheekbones,eyelashes,eyebrows,' +
+    'height,weight,shape,figure,slim,fitness,healthy,energy,frequency,vibration,vibrations,manifest,manifesting,manifestation,universe,' +
+    'success,successful,career,business,brand,results,instant,instantly,permanent,permanently,automatically,naturally,effortlessly,easily,' +
+    'quickly,magic,magical,affirmation,affirmations,subconscious,subconscious mind,mindset,level,upgrade,upgraded,boost,booster,powerful,' +
+    'positive,negative,healing,perfect,perfectly,aesthetic,main character,boyfriend,girlfriend,relationship,self love,self care,routine,' +
+    'morning,daily,celebrity,famous,popular,social media,instagram,youtube,followers,content,creator,influencer,viral,model,actress,' +
+    'smile,teeth,voice,hairstyle,smooth,youthful,glowing skin,dream life,lifestyle,abundance,lucky,blessed,anxiety,stress,relax,relaxed,' +
+    'deep sleep,focus,memory,brain,intelligent,genius,topper,exam,exams,marks,college,school,office,promotion,salary,diamond,luxury,' +
+    'princess,queen,goddess,divine,shifting,script,awareness,consciousness,frequency,meditation,gratitude,grateful,protection,' +
+    'naturally,literally,actually,totally,completely,absolutely,extremely,really,amazing,awesome,special,unique,charming,charisma,' +
+    'elegant,classy,graceful,feminine,masculine,handsome,cute,sexy,hot,body,features,makeover,transformation,journey,process,' +
+    'phone,laptop,car,house,mansion,bank balance,credit card,account,million,billion,money magnet,magnet,attract,attracts,attracting,' +
+    'receive,deserve,worthy,enough,limit,limitless,unlimited,power,status,respect,priority,control,choice,decision,belief,beliefs,' +
+    'thoughts,feelings,emotions,emotional,mental,physical health,mental health,skin care,hair growth,long hair,thick hair,silky,shiny,' +
+    'propose,proposed,luxurious,accept,accepted,believe,change,changed,happen,happening,already,always,forever,everything,everyone,attention,compliment,compliments,crush,date,proposal,wedding,marriage,partner,soulmate,twin flame,specific person,manifested,'+
+    'volume,length,growth,fast,faster,speed,super,extra,ultra,next level,high level,top,best,first,class,first class,version')
+    .split(',');
+
+  // a sound key: consonants, with "." wherever a vowel sound falls (sk.n for skin, s.k.n for sakna)
+  // some English sounds are written more than one way in Hindi, so a word gets a key for each:
+  // w between vowels (ग्लोइंग glowing, पावर power), -sion (वर्जन version), a silent e (टाइमलाइन timeline)
+  function enKeys(w) {
+    const out = new Set();
+    for (const ww of ['v', '']) for (const sion of ['shan', 'jan']) for (const e of [false, true])
+      for (const x of ['ks', 'gz']) out.add(enKey(w, ww, sion, e, x)); // x as ks, or gz as in luxury (लग्ज़री)
+    return [...out];
+  }
+  function enKey(w, ww, sion, silentE, x) {
+    let s = w.toLowerCase().replace(/[^a-z]/g, '');
+    if (silentE) s = s.replace(/(?<=[aeiou][^aeiou])e(?=[^aeiou][aeiouy])/g, '');
+    s = s.replace(/sion/g, sion).replace(/tion/g, 'shan').replace(/ture/g, 'char').replace(/ph/g, 'f').replace(/ck/g, 'k').replace(/qu/g, 'kv')
+      .replace(/x/g, x).replace(/wh/g, 'v').replace(/^kn/, 'n').replace(/^wr/, 'r').replace(/gh/g, '')
+      .replace(/c(?=[eiy])/g, 's').replace(/c/g, 'k').replace(/g(?=[eiy])/g, 'j').replace(/w(?![aeiou])/g, '').replace(/(?<=[aeiou])w/g, ww).replace(/w/g, 'v');
+    return shape(s);
+  }
+  function hiKey(s) { return shape(s.replace(/q/g, 'k').replace(/w/g, 'v')); }
+  function shape(s) {
+    s = s.replace(/chh|ch/g, 'c').replace(/sh/g, 's').replace(/ph/g, 'f').replace(/th/g, 't').replace(/dh/g, 'd').replace(/bh/g, 'b')
+      .replace(/kh/g, 'k').replace(/gh/g, 'g').replace(/jh/g, 'j').replace(/z/g, 'j').replace(/h/g, '');
+    return s.replace(/[aeiouy]+/g, '.').replace(/([^.])\1+/g, '$1').replace(/\.$/, '');
+  }
+  const bare = k => k.replace(/\./g, '');
+  function lev(a, b) {
+    const m = a.length, n = b.length; let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  const LEX = new Map();
+  for (const e of ENGLISH) {
+    let keys = [''];
+    for (const w of e.split(' ')) keys = keys.flatMap(k => enKeys(w).map(x => (k ? k + ' ' : '') + x));
+    for (const k of keys) if (!LEX.has(k)) LEX.set(k, e);
+  }
+  const LEX_KEYS = [...LEX.keys()];
+  // how close a Devanagari word's key must be: short words exactly, longer ones may differ a little
+  // (Whisper spells फिस्टिकल for physical, परसनाल्टी for personality)
+  function close(k, key) {
+    const c = bare(key).length;
+    if (k === key) return c >= 3 || (c === 2 && key[0] === '.'); // ideal (.d.l) but not dil (d.l)
+    if (c === 4) return bare(k) === bare(key) && lev(k, key) <= 1; // same consonants, one vowel slip (फावरेट favourite)
+    if (c < 4 || bare(k)[0] !== bare(key)[0]) return false; // a consonant slip on a short word turns मंज़िल into mental
+    if (c < 6) return lev(k, key) <= 1 || (bare(k) === bare(key) && lev(k, key) <= 2);
+    return lev(bare(k), bare(key)) <= 1 && lev(k, key) <= 3;
+  }
+  function english(key, phrase) {
+    if (LEX.has(key) && close(key, key)) return LEX.get(key);
+    let hit = null;
+    for (const k of LEX_KEYS) {
+      // phrases: same consonants in each word, at most one vowel slip (गलो अप glow up, not skin clear → skin care)
+      if (phrase ? !(k.includes(' ') && bare(k) === bare(key) && lev(k, key) <= 1) : (k.includes(' ') || !close(k, key))) continue;
+      if (hit && LEX.get(hit) !== LEX.get(k)) return null; // two different near matches: leave it
+      hit = k;
+    }
+    return hit ? LEX.get(hit) : null;
+  }
+
   function romanize(text) {
     if (!DEV.test(text)) return text;
-    return text
-      .replace(/[०-९]/g, d => String('०१२३४५६७८९'.indexOf(d)))
-      .replace(/[।॥]/g, '.')
-      .replace(/[ऀ-ॿ]+/g, word);
+    text = text.replace(/[०-९]/g, d => String('०१२३४५६७८९'.indexOf(d))).replace(/[।॥]/g, '.');
+    const parts = text.split(/([ऀ-ॿ]+)/); // odd indexes are Devanagari words
+    const words = [];
+    for (let i = 1; i < parts.length; i += 2) words.push({ i, dev: parts[i], s: sound(parts[i]) });
+    for (let w = 0; w < words.length; w++) {
+      const a = words[w], b = words[w + 1];
+      // two-word phrases first (glow up, self love), when only a space separates them
+      if (b && parts[a.i + 1] === ' ') {
+        const hit = english(hiKey(a.s) + ' ' + hiKey(b.s), true);
+        if (hit && hit.includes(' ')) { parts[a.i] = hit; parts[a.i + 1] = ''; parts[b.i] = ''; w++; continue; }
+      }
+      parts[a.i] = COMMON[a.dev] || english(hiKey(a.s)) || spell(a.s);
+    }
+    return parts.join('');
   }
   return { romanize };
 })();
