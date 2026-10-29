@@ -1,9 +1,21 @@
 # Subliminal Studio
 
-A single-page web app for making subliminal videos in the browser. Add an affirmation
+A website and browser app for making subliminal videos. Add an affirmation
 recording, set it under background sound, and export a finished video sized for each platform.
 
 Everything renders on your device. Nothing is uploaded.
+
+## Pages
+
+| File | Page |
+| --- | --- |
+| `index.html` | Home page |
+| `studio.html` | The studio app |
+| `guide.html` | How to write, record, mix and post a subliminal |
+| `faq.html` | Common questions |
+| `privacy.html` | What happens to your files |
+| `404.html` | Not-found page for GitHub Pages |
+| `assets/` | Shared stylesheet and icon |
 
 ## Use it
 
