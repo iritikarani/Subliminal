@@ -315,8 +315,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <label><input class="vh" type="radio" name="voiceTone" value="natural" data-k="voiceTone"><span>Natural</span></label>
             <label><input class="vh" type="radio" name="voiceTone" value="calm" data-k="voiceTone"><span>Calm</span></label>
             <label><input class="vh" type="radio" name="voiceTone" value="dreamy" data-k="voiceTone"><span>Dreamy</span></label>
+            <label><input class="vh" type="radio" name="voiceTone" value="hollow" data-k="voiceTone"><span>Hollow</span></label>
+            <label><input class="vh" type="radio" name="voiceTone" value="airy" data-k="voiceTone"><span>Airy</span></label>
           </div>
-          <p class="help">Calm quiets background noise between phrases, softens harsh and hissy sounds, evens out loud and quiet words, and adds a soft room. Dreamy is warmer, with a longer, airier echo.</p>
+          <p class="help">Calm quiets background noise between phrases, softens harsh and hissy sounds, evens out loud and quiet words, and adds a soft room. Dreamy is warmer, with a longer echo. Hollow sounds distant, as if from inside a tube, with a long airy room: the classic subliminal sound. Airy is thin and breathy, like a soft whisper.</p>
+        </div>
+        <div class="field">
+          <div class="field-head"><span>Effects</span></div>
+          <label class="check"><input type="checkbox" data-k="fxEcho"> Echo: soft repeats trail after each phrase</label>
+          <label class="check"><input type="checkbox" data-k="fx8d"> 8D: the voice slowly circles around your head (headphones)</label>
+          <label class="check"><input type="checkbox" data-k="fxPitch"> Pitch layers: extra voice layers sit a little higher and lower</label>
+          <button type="button" class="tiny add-line" id="subPreset">✦ One-tap subliminal sound</button>
+          <p class="help">One tap sets a Hollow tone, 3 layers with pitch layers, echo, 8D and a quiet −28 dB voice. You can change any of them afterwards.</p>
         </div>
 
         <div class="field">
@@ -1044,16 +1054,25 @@ class MixEngine {
       const { step, playLen, C } = this.cycle(S);
       const Ly = Math.max(1, S.layers | 0), pans = layerPans(Ly);
       const vg = dbToGain(S.voiceDb) / Math.sqrt(Ly), d = v.data;
+      const gapS = C - playLen;
       for (let k = 0; k < Ly; k++) {
-        const a = (pans[k] + 1) * Math.PI / 4, gl = vg * Math.cos(a), gr = vg * Math.sin(a);
-        let u = (pos + Math.floor(k * C / Ly)) % C;
+        // pitch layers: extra layers play a little faster or slower, so they sit higher or lower
+        const stepK = step * (S.fxPitch ? PITCH[k % PITCH.length] : 1);
+        const playK = k && S.fxPitch ? Math.floor((d.length - 1) / stepK) : playLen, CK = playK + gapS;
+        let u = (pos + Math.floor(k * CK / Ly)) % CK;
         const plain = keepVoice && k === 0;
+        let gl = 0, gr = 0;
         for (let i = 0; i < n; i++) {
-          if (u < playLen) {
-            const x = u * step, j = x | 0, s = d[j] + (d[j + 1] - d[j]) * (x - j), f = plain ? 1 : fg[i];
+          if ((i & 63) === 0) { // 8D: each layer circles the head every 8 s, quieter as it passes behind
+            let pan = pans[k], depth = 1;
+            if (S.fx8d) { const ph = 2 * Math.PI * ((pos + i) / this.sr / 8 + k / Ly); pan = 0.95 * Math.sin(ph); depth = 0.82 + 0.18 * Math.cos(ph); }
+            const a = (pan + 1) * Math.PI / 4; gl = vg * depth * Math.cos(a); gr = vg * depth * Math.sin(a);
+          }
+          if (u < playK) {
+            const x = u * stepK, j = x | 0, s = d[j] + (d[j + 1] - d[j]) * (x - j), f = plain ? 1 : fg[i];
             vm[i] += s; L[i] += s * gl * f; R[i] += s * gr * f;
           }
-          if (++u >= C) u = 0;
+          if (++u >= CK) u = 0;
         }
       }
       const inv = 1 / Ly; let sum = 0;
@@ -1073,9 +1092,14 @@ function soft(x) {
 
 /* ---------- Voice tone: cleanup, gentle EQ, levelling and a soft room, rendered once per recording ---------- */
 const TONES = {
-  calm:   { shelf: 2.5, mid: -3, air: -5, lp: 11000, wet: 0.2, decay: 1.6, tail: 0.6 },
-  dreamy: { shelf: 3.5, mid: -4, air: -8, lp: 8000, wet: 0.38, decay: 3.0, tail: 1.0 }
+  calm:   { hp: 85, shelf: 2.5, mid: -3, air: -5, lp: 11000, wet: 0.2, decay: 1.6, tail: 0.6 },
+  dreamy: { hp: 85, shelf: 3.5, mid: -4, air: -8, lp: 8000, wet: 0.38, decay: 3.0, tail: 1.0 },
+  // hollow: a narrow band, a short comb (the "tube" sound), a shimmering double and a long room
+  hollow: { hp: 260, shelf: 0, mid: -2, air: -10, lp: 4200, wet: 0.5, decay: 3.4, tail: 1.2, comb: { ms: 9, fb: 0.45, mix: 0.55 }, chorus: true },
+  // airy: thin and breathy, like a soft whisper close to the ear
+  airy:   { hp: 420, shelf: -4, mid: 2, air: 4, lp: 12000, wet: 0.3, decay: 2.0, tail: 0.8, chorus: true }
 };
+const PITCH = [1, 1.12246, 0.8909, 1.18921, 0.8409]; // pitch layers: as recorded, then +2, −2, +3, −3 semitones
 function renderOffline(oc) {
   return new Promise((res, rej) => {
     oc.oncomplete = e => res(e.renderedBuffer);
@@ -1121,9 +1145,10 @@ function roomImpulse(sr, decay) {
   }
   return ir;
 }
-async function toneVoice(v, tone) {
-  const T = TONES[tone]; if (!T) return v;
-  const sr = v.rate, dry0 = quietGaps(v.data, sr), tail = Math.round(sr * T.tail), len = dry0.length + tail;
+async function toneVoice(v, tone, echo) {
+  const T = TONES[tone]; if (!T && !echo) return v;
+  const sr = v.rate, dry0 = T ? quietGaps(v.data, sr) : v.data;
+  const tail = Math.round(sr * ((T ? T.tail : 0) + (echo ? 1.2 : 0))), len = dry0.length + tail;
   const oc = offlineCtx(1, len, sr);
   const buf = oc.createBuffer(1, dry0.length, sr); buf.getChannelData(0).set(dry0);
   const src = oc.createBufferSource(); src.buffer = buf;
@@ -1131,15 +1156,41 @@ async function toneVoice(v, tone) {
     const b = oc.createBiquadFilter(); b.type = type; b.frequency.value = freq;
     if (gain !== null) b.gain.value = gain; if (Q) b.Q.value = Q; return b;
   };
-  const chain = [filt('highpass', 85, null, 0.707), filt('lowshelf', 250, T.shelf), filt('peaking', 3200, T.mid, 1), filt('highshelf', 6500, T.air), filt('lowpass', Math.min(T.lp, sr * 0.45), null, 0.707)];
-  const comp = oc.createDynamicsCompressor();
-  comp.threshold.value = -28; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.015; comp.release.value = 0.3;
-  let node = src; for (const b of chain) { node.connect(b); node = b; } node.connect(comp);
-  const ir = roomImpulse(sr, T.decay), ib = oc.createBuffer(1, ir.length, sr); ib.getChannelData(0).set(ir);
-  const conv = oc.createConvolver(); conv.buffer = ib;
-  const dry = oc.createGain(); dry.gain.value = 1 - T.wet * 0.5;
-  const wet = oc.createGain(); wet.gain.value = T.wet;
-  comp.connect(dry); dry.connect(oc.destination); comp.connect(conv); conv.connect(wet); wet.connect(oc.destination);
+  const gain = x => { const g = oc.createGain(); g.gain.value = x; return g; };
+  let node = src;
+  if (T) {
+    const comp = oc.createDynamicsCompressor();
+    comp.threshold.value = -28; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.015; comp.release.value = 0.3;
+    for (const b of [filt('highpass', T.hp, null, 0.707), filt('lowshelf', 250, T.shelf), filt('peaking', 3200, T.mid, 1), filt('highshelf', 6500, T.air), filt('lowpass', Math.min(T.lp, sr * 0.45), null, 0.707), comp]) { node.connect(b); node = b; }
+  }
+  if (T && T.comb) { // a short feedback delay rings at its own pitch: the hollow, "inside a tube" colour
+    const out = gain(1), d = oc.createDelay(0.05), fb = gain(T.comb.fb), wetc = gain(T.comb.mix);
+    d.delayTime.value = T.comb.ms / 1000;
+    node.connect(gain(1 - T.comb.mix)).connect(out);
+    node.connect(d); d.connect(fb); fb.connect(d); d.connect(wetc); wetc.connect(out);
+    node = out;
+  }
+  if (T && T.chorus) { // two slowly wavering copies a few milliseconds late: a soft, shimmering double
+    const out = gain(1); node.connect(out);
+    for (const [ms, rate] of [[18, 0.31], [26, 0.47]]) {
+      const d = oc.createDelay(0.1), lfo = oc.createOscillator(), depth = gain(0.004);
+      d.delayTime.value = ms / 1000; lfo.frequency.value = rate; lfo.connect(depth); depth.connect(d.delayTime); lfo.start();
+      node.connect(d); d.connect(gain(0.35)).connect(out);
+    }
+    node = out;
+  }
+  if (echo) { // soft repeats a third of a second apart, each darker than the last
+    const out = gain(1), d = oc.createDelay(1), lp = filt('lowpass', 2500, null, 0.707), fb = gain(0.38);
+    d.delayTime.value = 0.33; node.connect(out);
+    node.connect(d); d.connect(lp); lp.connect(fb); fb.connect(d); lp.connect(gain(0.32)).connect(out);
+    node = out;
+  }
+  if (T) {
+    const ir = roomImpulse(sr, T.decay), ib = oc.createBuffer(1, ir.length, sr); ib.getChannelData(0).set(ir);
+    const conv = oc.createConvolver(); conv.buffer = ib;
+    node.connect(gain(1 - T.wet * 0.5)).connect(oc.destination);
+    node.connect(conv); conv.connect(gain(T.wet)).connect(oc.destination);
+  } else node.connect(oc.destination);
   src.start();
   const d = (await renderOffline(oc)).getChannelData(0).slice();
   for (let i = 0; i < tail; i++) d[len - 1 - i] *= i / tail; // let the echo die away
@@ -1743,7 +1794,7 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', capSource: 'voice', script: '', extra: [], affSize: 100, titleSize: 100
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, fxEcho: false, fx8d: false, fxPitch: false, showWords: true, capLang: 'hinglish', capSource: 'voice', script: '', extra: [], affSize: 100, titleSize: 100
 };
 const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize', 'titleSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
@@ -1864,7 +1915,7 @@ function changed(k) {
   persist();
   refreshOutputs();
   if (k === 'ratio') layoutMonitor();
-  if (k === 'voiceTone') applyTone();
+  if (k === 'voiceTone' || k === 'fxEcho') applyTone();
   if (k === 'showWords' && S.showWords && media.voiceBase && !media.captions && !capBusy) transcribe();
   if (k === 'capLang' && media.voiceBase && S.showWords) transcribe();
   if (k === 'script' || k === 'capSource') scriptChanged();
@@ -2018,14 +2069,14 @@ async function applyTone() {
   if (!media.voiceBase) return;
   const job = ++toneJob, base = media.voiceBase;
   let v = base;
-  if (TONES[S.voiceTone]) {
-    $('#voiceInfo').textContent = 'Making your voice calmer…';
-    try { v = await toneVoice(base, S.voiceTone); } catch (e) { v = base; }
+  if (TONES[S.voiceTone] || S.fxEcho) {
+    $('#voiceInfo').textContent = 'Shaping your voice…';
+    try { v = await toneVoice(base, S.voiceTone, S.fxEcho); } catch (e) { v = base; }
   }
   if (job !== toneJob || base !== media.voiceBase) return;
   const was = P.playing; if (was) stopPreview();
   media.voice = v; calcEngine.setVoice(v); if (previewEngine) previewEngine.setVoice(v);
-  const tone = v === base ? (TONES[S.voiceTone] ? 'natural tone (calming wasn’t available)' : 'natural tone') : `${S.voiceTone} tone`;
+  const tone = v === base ? (TONES[S.voiceTone] || S.fxEcho ? 'natural tone (the effects weren’t available)' : 'natural tone') : `${S.voiceTone} tone${S.fxEcho ? ' with echo' : ''}`;
   $('#voiceInfo').textContent = `${fmtTime(base.data.length / base.rate)} after trimming silence · ${tone}`;
   drawVoiceWave(); refreshOutputs();
   if (was) startPreview();
@@ -2915,6 +2966,11 @@ function boot() {
   $('#musicRemove').addEventListener('click', removeMusic);
   $('#capRun').addEventListener('click', transcribe);
   $('#voiceRemove').addEventListener('click', removeVoice);
+  $('#subPreset').addEventListener('click', () => {
+    setValue('voiceDb', -28); setValue('layers', 3); setValue('fxPitch', true); setValue('fx8d', true);
+    S.fxEcho = true; $$('[data-k="fxEcho"]').forEach(el => { el.checked = true; });
+    setValue('voiceTone', 'hollow'); // shapes the voice once, with the echo
+  });
   $$('[data-clear]').forEach(b => b.addEventListener('click', () => { setValue(b.dataset.clear, ''); $('#' + b.dataset.clear).focus(); }));
   $('#extraAdd').addEventListener('click', () => {
     if (S.extra.length >= 4) return;
