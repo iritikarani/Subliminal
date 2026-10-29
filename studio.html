@@ -1737,7 +1737,7 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', asrModel: 'small', extra: [], affSize: 100, titleSize: 100
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', asrModel: 'small', asrV: 2, extra: [], affSize: 100, titleSize: 100
 };
 const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize', 'titleSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
@@ -1755,6 +1755,7 @@ function loadSettings() {
   if (!PALETTES[s.palette]) s.palette = DEFAULTS.palette;
   if (!FONTS[s.font]) s.font = DEFAULTS.font;
   if (s.asrModel !== 'small' && s.asrModel !== 'base') s.asrModel = DEFAULTS.asrModel;
+  if (saved.asrV !== 2) { s.asrModel = 'small'; s.asrV = 2; } // one-time switch back to More accurate
   if (!['en', 'hi', 'hinglish'].includes(s.capLang)) s.capLang = DEFAULTS.capLang;
   if (saved.textMode === 'none') s.showWords = false;
   s.extra = Array.isArray(s.extra) ? s.extra.filter(x => typeof x === 'string').slice(0, 4) : [];
