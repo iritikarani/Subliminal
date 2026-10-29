@@ -560,6 +560,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
             <option value="hi">Hindi</option>
             <option value="hinglish">Hinglish (Hindi + English, in English letters)</option>
           </select>
+          <div class="field-head"><label for="script">Your script (optional)</label></div>
+          <textarea class="text" id="script" data-k="script" rows="5" placeholder="Paste exactly what you say in the recording, in Hindi, English or Hinglish. Each line becomes one caption."></textarea>
+          <p class="help">With a script, the captions use your exact words, timed to your voice. English words stay in English and Hindi words are written in English letters. Long lines are split up.</p>
           <p class="msg" id="capStatus" role="status">Add your voice recording in step 01. Its words will appear on screen in time with your voice.</p>
           <div class="progress" id="capProgress" hidden><div class="bar"><i id="capBar"></i></div></div>
           <div class="cap-list" id="capList" hidden></div>
@@ -1732,7 +1735,7 @@ const DEFAULTS = {
   bg: 'sparkle', palette: 'rose', font: 'serif', titlePos: 'top',
   title: 'Revenge Glow Up', subtitle: 'Subliminal · headphones on',
   affirm: 'You had a glow up in this reality\nYou are the most confident version of yourself\nPeople are drawn to your energy',
-  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', extra: [], affSize: 100, titleSize: 100
+  affSec: 6, handle: '', photoDim: 0.35, photoSparkle: true, showWords: true, capLang: 'hinglish', script: '', extra: [], affSize: 100, titleSize: 100
 };
 const NUM_KEYS = new Set(['voiceDb', 'layers', 'speed', 'gap', 'repeats', 'minutes', 'ambientDb', 'musicDb', 'fade', 'photoDim', 'affSec', 'affSize', 'titleSize']);
 const DIMS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
@@ -1762,7 +1765,7 @@ function persist() {
   saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) { /* storage unavailable */ } }, 300);
 }
 
-const media = { voiceBase: null, voice: null, voiceName: '', music: null, musicName: '', captions: null };
+const media = { voiceBase: null, voice: null, voiceName: '', music: null, musicName: '', captions: null, heard: null, asrFailed: false };
 const calcEngine = new MixEngine(SR);
 let audioCtx = null, previewEngine = null;
 const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1854,6 +1857,7 @@ function changed(k) {
   if (k === 'voiceTone') applyTone();
   if (k === 'showWords' && S.showWords && media.voiceBase && !media.captions && !capBusy) transcribe();
   if (k === 'capLang' && media.voiceBase && S.showWords) transcribe();
+  if (k === 'script') scriptChanged();
 }
 
 function refreshOutputs() {
@@ -2192,7 +2196,18 @@ const HG = (() => {
     }
     return parts.join('');
   }
-  return { romanize };
+  // sound keys for lining up a script word with a transcribed one (Devanagari or English letters)
+  function keys(w) {
+    if (DEV.test(w)) { const d = w.replace(/[^\u0900-\u097F]/g, ''); return d ? [hiKey(sound(d))] : []; }
+    const l = w.toLowerCase().replace(/[^a-z]/g, ''); if (!l) return [];
+    return [...new Set([shape(l.replace(/ck/g, 'k').replace(/q/g, 'k').replace(/w/g, 'v').replace(/x/g, 'ks')), ...enKeys(l)])];
+  }
+  function similarity(a, b) {
+    let best = 0;
+    for (const x of a) for (const y of b) best = Math.max(best, 1 - lev(x, y) / Math.max(x.length, y.length, 1));
+    return best;
+  }
+  return { romanize, keys, similarity, isDev: w => DEV.test(w) };
 })();
 
 /* ---------- Words from the recording: Whisper speech recognition runs in a worker on this device ---------- */
@@ -2302,7 +2317,13 @@ function setCapUI(msg, frac, isErr) {
   $('#capRun').hidden = !media.voiceBase || capBusy;
 }
 function asrFailed() {
-  capBusy = false; holdCapWake(false); refreshOutputs();
+  capBusy = false; holdCapWake(false); media.asrFailed = true;
+  if (S.script.trim()) {
+    buildCaptions(); refreshOutputs();
+    setCapUI('The speech model couldn’t load, so your script was timed using the pauses in your voice. Play the preview to check it, or try again with a connection.', null);
+    return;
+  }
+  refreshOutputs();
   setCapUI('Couldn’t write out the words. Check your internet connection (the speech model downloads the first time), then try again.', null, true);
 }
 async function to16k(v) {
@@ -2324,8 +2345,10 @@ async function to16k(v) {
 async function transcribe() {
   if (!media.voiceBase) return;
   const job = ++capJob, base = media.voiceBase;
-  capBusy = true; capFiles = {}; media.captions = null; renderCapList(); refreshOutputs(); holdCapWake(true);
-  setCapUI('Getting ready to write out your words…', 0);
+  capBusy = true; capFiles = {}; media.captions = null; media.heard = null; media.asrFailed = false; holdCapWake(true);
+  buildCaptions(); // with a script, rough timing from the pauses shows right away; the speech model refines it
+  renderCapList(); refreshOutputs();
+  setCapUI(S.script.trim() ? 'Timing your script to your voice…' : 'Getting ready to write out your words…', 0);
   try {
     const audio = await to16k(base);
     if (job !== capJob) return;
@@ -2364,12 +2387,144 @@ function onAsrMessage(e) {
   } else if (m.type === 'done') {
     capBusy = false; holdCapWake(false);
     const b = media.voiceBase;
-    media.captions = cleanChunks(m.chunks || [], b ? b.data.length / b.rate : 0);
-    if (capRoman) media.captions.forEach(c => { c.text = HG.romanize(c.text); });
-    renderCapList(); refreshOutputs();
-    setCapUI(media.captions.length ? `Found ${media.captions.length} line${media.captions.length === 1 ? '' : 's'}. They show on screen as you say them. Check them below.` : 'No words were found. Check that the language matches your recording, or use “My own lines”.', null, !media.captions.length);
+    media.heard = cleanChunks(m.chunks || [], b ? b.data.length / b.rate : 0);
+    buildCaptions(); renderCapList(); refreshOutputs();
+    const n = media.captions ? media.captions.length : 0, lines = `${n} line${n === 1 ? '' : 's'}`;
+    if (S.script.trim()) setCapUI(`Matched your script to your voice: ${lines}. Play the preview to check the timing.`, null);
+    else setCapUI(n ? `Found ${lines}. They show on screen as you say them. Check them below.` : 'No words were found. Check that the language matches your recording, or paste your script above.', null, !n);
   } else if (m.type === 'error') asrFailed();
 }
+// captions: the script timed to the voice when there is one, otherwise what the speech model heard
+function buildCaptions() {
+  const v = media.voiceBase; if (!v) return;
+  if (S.script.trim()) media.captions = alignScript(S.script, media.heard, v);
+  else if (media.heard) media.captions = media.heard.map(c => ({ s: c.s, e: c.e, text: capRoman ? HG.romanize(c.text) : c.text }));
+  else media.captions = null;
+}
+let scriptTimer = 0;
+function scriptChanged() {
+  clearTimeout(scriptTimer);
+  scriptTimer = setTimeout(() => {
+    if (!media.voiceBase || (capBusy && !S.script.trim())) return;
+    buildCaptions(); renderCapList(); refreshOutputs();
+    if (!capBusy) {
+      const n = media.captions ? media.captions.length : 0;
+      if (S.script.trim()) setCapUI(media.heard ? `Matched your script to your voice: ${n} line${n === 1 ? '' : 's'}.` : `Timed your script using the pauses in your voice: ${n} line${n === 1 ? '' : 's'}.`, null);
+      else setCapUI(n ? `Showing the ${n} line${n === 1 ? '' : 's'} heard in your recording.` : 'Press “Write out the words again” to write out your recording.', null);
+    }
+  }, 400);
+}
+
+// stretches of speech in the recording, from its loudness in 20 ms frames
+function speechSpans(v) {
+  const fl = Math.round(v.rate * 0.02), nf = Math.floor(v.data.length / fl), rms = new Float32Array(nf);
+  for (let f = 0; f < nf; f++) { let s = 0; for (let i = f * fl; i < (f + 1) * fl; i++) s += v.data[i] * v.data[i]; rms[f] = Math.sqrt(s / fl); }
+  const sorted = Float32Array.from(rms).sort(), thr = Math.max(sorted[Math.floor(nf * 0.1)] * 2.5, sorted[Math.floor(nf * 0.9)] * 0.08, 1e-4);
+  const spans = []; let start = -1, quiet = 0;
+  for (let f = 0; f <= nf; f++) {
+    const on = f < nf && rms[f] >= thr;
+    if (on) { if (start < 0) start = f; quiet = 0; }
+    else if (start >= 0 && (++quiet >= 13 || f === nf)) { // a pause of a quarter second or more ends a stretch
+      const end = f - quiet + 1;
+      if (end - start >= 5) spans.push([start * 0.02, end * 0.02]);
+      start = -1; quiet = 0;
+    }
+  }
+  return spans.length ? spans : [[0, v.data.length / v.rate]];
+}
+// the script as caption lines: its own lines and sentences, with long ones split near commas
+function scriptLines(script) {
+  const out = [];
+  for (const para of script.split(/\n+/)) {
+    for (const sent of para.split(/(?<=[.!?।])\s+/)) {
+      const words = sent.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) continue;
+      const parts = Math.ceil(words.length / 9), size = words.length / parts;
+      let at = 0;
+      for (let k = 1; k <= parts; k++) {
+        let end = k === parts ? words.length : Math.round(size * k);
+        for (let d = 1; d <= 2 && k < parts; d++) { // prefer to break after a comma close by
+          if (/[,;]$/.test(words[end - 1 - d] || '')) { end -= d; break; }
+          if (/[,;]$/.test(words[end - 1 + d] || '')) { end += d; break; }
+        }
+        if (end > at) out.push(words.slice(at, end));
+        at = end;
+      }
+    }
+  }
+  return out;
+}
+// times the script: script words are lined up with heard words by sound (a monotonic alignment, so a
+// misheard word doesn't throw the rest off); words without a match are placed between their neighbours
+// by length. With nothing heard, script length is spread over the stretches of speech.
+function alignScript(script, heard, v) {
+  const lines = scriptLines(script); if (!lines.length) return null;
+  const words = lines.flat(), n = words.length, letters = w => Math.max(1, w.replace(/[^\p{L}\p{M}]/gu, '').length); // Hindi vowel signs count too
+  const cp = new Float64Array(n + 1); for (let i = 0; i < n; i++) cp[i + 1] = cp[i] + letters(words[i]);
+  const spans = speechSpans(v), t0 = spans[0][0], t1 = spans[spans.length - 1][1];
+  // "speech time" skips the pauses, so spreading words by length doesn't drift across them
+  const sp = t => { let a = 0; for (const [x, y] of spans) { if (t <= x) return a; if (t < y) return a + t - x; a += y - x; } return a; };
+  const unsp = u => { for (const [x, y] of spans) { if (u < y - x - 1e-6) return x + Math.max(0, u); u -= y - x; } return t1; }; // a boundary belongs to the next stretch
+  const between = (ta, tb, f) => unsp(sp(ta) + (sp(tb) - sp(ta)) * f);
+  const start = new Float64Array(n).fill(NaN);
+  // heard words, each given a time inside its segment by length
+  const hw = [];
+  for (const c of heard || []) {
+    const ws = c.text.split(/\s+/).filter(Boolean), tot = ws.reduce((a, w) => a + letters(w), 0); let acc = 0;
+    for (const w of ws) { hw.push({ k: HG.keys(w), s: between(c.s, c.e, acc / tot) }); acc += letters(w); }
+  }
+  const m = hw.length;
+  if (m && n * m <= 9e6) {
+    const sk = words.map(w => HG.keys(w)), GAP = 0.55;
+    const tb = new Uint8Array((n + 1) * (m + 1)); let prev = new Float64Array(m + 1), cur = new Float64Array(m + 1);
+    for (let j = 0; j <= m; j++) { prev[j] = j * GAP; tb[j] = 2; }
+    for (let i = 1; i <= n; i++) {
+      cur[0] = i * GAP; tb[i * (m + 1)] = 1;
+      for (let j = 1; j <= m; j++) {
+        const sim = sk[i - 1].length && hw[j - 1].k.length ? HG.similarity(sk[i - 1], hw[j - 1].k) : 0;
+        let best = prev[j - 1] + (1 - sim), dir = 0;
+        if (prev[j] + GAP < best) { best = prev[j] + GAP; dir = 1; }
+        if (cur[j - 1] + GAP < best) { best = cur[j - 1] + GAP; dir = 2; }
+        cur[j] = best; tb[i * (m + 1) + j] = dir;
+      }
+      [prev, cur] = [cur, prev];
+    }
+    for (let i = n, j = m; i > 0 && j > 0;) {
+      const d = tb[i * (m + 1) + j];
+      if (d === 0) { if (HG.similarity(sk[i - 1], hw[j - 1].k) >= 0.65) start[i - 1] = hw[j - 1].s; i--; j--; }
+      else if (d === 1) i--; else j--;
+    }
+    for (let i = 1; i < n; i++) if (start[i] < start[i - 1]) start[i] = NaN; // keep matches in order
+  }
+  // place the rest: between matched neighbours by length, or across the speech when nothing matched
+  let a = -1;
+  for (let i = 0; i <= n; i++) {
+    if (i < n && isNaN(start[i])) continue;
+    const ta = a < 0 ? null : start[a], tbn = i < n ? start[i] : null;
+    for (let k = a + 1; k < i; k++) {
+      const lo = ta === null ? t0 : ta, hi = tbn === null ? t1 : tbn, cl = a < 0 ? 0 : cp[a], ch = i < n ? cp[i] : cp[n];
+      start[k] = between(lo, hi, (cp[k] - cl) / Math.max(1, ch - cl));
+    }
+    a = i;
+  }
+  // a line starts where its first word does, nudged onto the nearest unused start of speech after a pause
+  const onsets = spans.map(x => x[0]), caps = [], win = 1.5;
+  let w = 0, used = -1;
+  for (const line of lines) {
+    let s = start[w], pick = -1;
+    for (let o = used + 1; o < onsets.length; o++) {
+      if (Math.abs(onsets[o] - s) <= win && (pick < 0 || Math.abs(onsets[o] - s) < Math.abs(onsets[pick] - s))) pick = o;
+      if (onsets[o] > s + win) break;
+    }
+    if (pick >= 0 && (!caps.length || onsets[pick] > caps[caps.length - 1].s + 0.3)) { s = onsets[pick]; used = pick; }
+    const text = line.join(' ');
+    caps.push({ s, e: 0, text: HG.isDev(text) ? HG.romanize(text) : text });
+    w += line.length;
+  }
+  for (let i = 0; i < caps.length; i++) caps[i].e = i + 1 < caps.length ? Math.max(caps[i].s + 0.3, caps[i + 1].s - 0.05) : t1;
+  return caps;
+}
+
 function renderCapList() {
   const box = $('#capList'), caps = media.captions;
   box.textContent = ''; box.hidden = !caps || !caps.length;
@@ -2412,7 +2567,7 @@ async function onVoiceFile(file) {
   try {
     const ab = await decodeFile(file);
     if (P.playing) stopPreview();
-    media.voiceBase = prepVoice(ab); media.voiceName = file.name; media.captions = null;
+    media.voiceBase = prepVoice(ab); media.voiceName = file.name; media.captions = null; media.heard = null;
     $('#voiceEmpty').hidden = true; $('#voiceFull').hidden = false;
     $('#voiceName').textContent = file.name;
     $('#voiceStatus').textContent = 'Voice loaded.';
@@ -2440,7 +2595,7 @@ async function onMusicFile(file) {
 function removeVoice() {
   if (P.playing) stopPreview();
   toneJob++; capJob++; capBusy = false; holdCapWake(false);
-  media.voiceBase = null; media.voice = null; media.voiceName = ''; media.captions = null;
+  media.voiceBase = null; media.voice = null; media.voiceName = ''; media.captions = null; media.heard = null;
   calcEngine.setVoice(null); if (previewEngine) previewEngine.setVoice(null);
   $('#voiceEmpty').hidden = false; $('#voiceFull').hidden = true; $('#voiceRemove').hidden = true; $('#voiceFile').value = '';
   $('#voiceStatus').textContent = 'Recording removed.';
@@ -2647,7 +2802,7 @@ async function createOutput(audioOnly) {
   if (exporting) return;
   const msg = $('#exportMsg'); msg.hidden = true; msg.classList.remove('err');
   const snap = JSON.parse(JSON.stringify(S));
-  if (snap.showWords && media.voiceBase && capBusy) {
+  if (snap.showWords && media.voiceBase && capBusy && !(media.captions && media.captions.length)) {
     msg.textContent = 'The words from your recording are still being written out. Wait for them to finish, or untick “Show affirmations on the video” in step 05.';
     msg.classList.add('err'); msg.hidden = false; return;
   }
