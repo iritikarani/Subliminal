@@ -1670,8 +1670,8 @@ function captionAt(S, t) {
   if (u >= playLen) return null;
   const rt = u * step / v.rate, fade = 0.2 * S.speed;
   for (let i = 0; i < caps.length; i++) {
-    const c = caps[i], next = caps[i + 1], start = c.s - 0.15;
-    const end = Math.min(next ? next.s - 0.15 : Infinity, c.e + 0.6);
+    const c = caps[i], next = caps[i + 1], start = c.s - 0.1;
+    const end = Math.min(next ? next.s - 0.1 : Infinity, c.e + 0.6);
     if (rt >= start && rt < end) {
       if (!c.text.trim()) return null;
       return { text: c.text.trim(), alpha: Math.max(0, Math.min(1, (rt - start) / fade, (end - rt) / fade)) };
@@ -1979,7 +1979,10 @@ const visState = { level: 0, scope: new Float32Array(1024), scopeW: 0, live: fal
 let lastNow = performance.now(), idleT = 0, exporting = false;
 
 function previewTime() {
-  return P.playing ? P.startPos / P.sr + Math.max(0, audioCtx.currentTime - P.startTime) : P.pausedT;
+  if (!P.playing) return P.pausedT;
+  // what you hear lags the audio clock by the processor's buffer plus the device's output delay
+  const lag = 4096 / P.sr + (audioCtx.outputLatency || audioCtx.baseLatency || 0);
+  return P.startPos / P.sr + Math.max(0, audioCtx.currentTime - P.startTime - lag);
 }
 function tick(now) {
   requestAnimationFrame(tick);
@@ -2463,7 +2466,9 @@ function useScript() { return S.capSource === 'script' && !!S.script.trim(); }
 function buildCaptions() {
   const v = media.voiceBase; if (!v) return;
   if (useScript()) media.captions = alignScript(S.script, media.heard, v);
-  else if (media.heard) media.captions = media.heard.map(c => ({ s: c.s, e: c.e, text: capRoman ? HG.romanize(c.text) : c.text }));
+  // what was heard goes through the same timing pass as a script: words spread over speaking time,
+  // long segments split, and each line snapped to where speech starts (Whisper's own times drift)
+  else if (media.heard) media.captions = media.heard.length ? alignScript(media.heard.map(c => c.text).join('\n'), media.heard, v, capRoman) : [];
   else media.captions = null;
 }
 let scriptTimer = 0;
@@ -2498,32 +2503,49 @@ function speechSpans(v) {
   }
   return spans.length ? spans : [[0, v.data.length / v.rate]];
 }
-// the script as caption lines: its own lines and sentences, with long ones split near commas
+// the script as sentences: its own lines, split at full stops (long ones are split later, once timed)
 function scriptLines(script) {
   const out = [];
-  for (const para of script.split(/\n+/)) {
+  for (const para of script.split(/\n+/))
     for (const sent of para.split(/(?<=[.!?।])\s+/)) {
       const words = sent.trim().split(/\s+/).filter(Boolean);
-      if (!words.length) continue;
-      const parts = Math.ceil(words.length / 9), size = words.length / parts;
-      let at = 0;
-      for (let k = 1; k <= parts; k++) {
-        let end = k === parts ? words.length : Math.round(size * k);
-        for (let d = 1; d <= 2 && k < parts; d++) { // prefer to break after a comma close by
-          if (/[,;]$/.test(words[end - 1 - d] || '')) { end -= d; break; }
-          if (/[,;]$/.test(words[end - 1 + d] || '')) { end += d; break; }
-        }
-        if (end > at) out.push(words.slice(at, end));
-        at = end;
-      }
+      if (words.length) out.push(words);
+    }
+  return out;
+}
+// words that end a Hindi clause: a line may end on them but should not start with them
+const CLAUSE_END = new Set(['है', 'हैं', 'हो', 'हूँ', 'हूं', 'था', 'थी', 'थे', 'hai', 'hain', 'ho', 'hoon', 'hun', 'hu', 'tha', 'thi', 'the']);
+const bareWord = w => w.toLowerCase().replace(/[^\p{L}\p{M}]/gu, '');
+// splits a timed sentence into lines of at most 9 words. It cuts at the longest pause (word times jump
+// across one), but word times are estimates, so within two words of it a cut just after a clause end
+// (है, हो) wins, and a line never opens with one. Without a real pause: a comma, or even halves.
+function splitTimed(words, starts, letters) {
+  if (words.length <= 9) return [words.length];
+  const ok = j => j >= 3 && j <= words.length - 3;
+  const ends = j => CLAUSE_END.has(bareWord(words[j - 1])), opens = j => CLAUSE_END.has(bareWord(words[j]));
+  let jp = -1, gap = 0;
+  for (let j = 3; j <= words.length - 3; j++) {
+    const g = starts[j] - starts[j - 1] - 0.07 * letters(words[j - 1]);
+    if (g > gap) { gap = g; jp = j; }
+  }
+  let best = -1;
+  if (jp > 0 && gap >= 0.15) {
+    for (const d of [0, 1, -1, 2, -2]) if (ok(jp + d) && ends(jp + d) && !opens(jp + d)) { best = jp + d; break; }
+    if (best < 0) best = jp;
+    while (opens(best) && ok(best + 1)) best++;
+  } else {
+    let score = -Infinity;
+    for (let j = 3; j <= words.length - 3; j++) {
+      const sc = (/[,;]$/.test(words[j - 1]) ? 1 : 0) + (ends(j) ? 0.5 : 0) - (opens(j) ? 5 : 0) - 0.05 * Math.abs(words.length - 2 * j);
+      if (sc > score) { score = sc; best = j; }
     }
   }
-  return out;
+  return [...splitTimed(words.slice(0, best), starts.slice(0, best), letters), ...splitTimed(words.slice(best), starts.slice(best), letters)];
 }
 // times the script: script words are lined up with heard words by sound (a monotonic alignment, so a
 // misheard word doesn't throw the rest off); words without a match are placed between their neighbours
 // by length. With nothing heard, script length is spread over the stretches of speech.
-function alignScript(script, heard, v) {
+function alignScript(script, heard, v, roman = true) {
   const lines = scriptLines(script); if (!lines.length) return null;
   const words = lines.flat(), n = words.length, letters = w => Math.max(1, w.replace(/[^\p{L}\p{M}]/gu, '').length); // Hindi vowel signs count too
   const cp = new Float64Array(n + 1); for (let i = 0; i < n; i++) cp[i + 1] = cp[i] + letters(words[i]);
@@ -2573,18 +2595,27 @@ function alignScript(script, heard, v) {
     }
     a = i;
   }
+  // long sentences become lines of up to 9 words, split where the voice pauses
+  const timed = []; let w0 = 0;
+  for (const sent of lines) {
+    for (const len of splitTimed(sent, Array.from(start.subarray(w0, w0 + sent.length)), letters)) { timed.push(words.slice(w0, w0 + len)); w0 += len; }
+  }
   // a line starts where its first word does, nudged onto the nearest unused start of speech after a pause
   const onsets = spans.map(x => x[0]), caps = [], win = 1.5;
   let w = 0, used = -1;
-  for (const line of lines) {
+  for (const line of timed) {
     let s = start[w], pick = -1;
     for (let o = used + 1; o < onsets.length; o++) {
       if (Math.abs(onsets[o] - s) <= win && (pick < 0 || Math.abs(onsets[o] - s) < Math.abs(onsets[pick] - s))) pick = o;
       if (onsets[o] > s + win) break;
     }
+    if (pick < 0) { // still in a pause? start where the speech resumes
+      const nx = onsets.findIndex((o, i) => i > used && o >= s);
+      if (nx >= 0 && onsets[nx] - s <= 1.5 && !spans.some(([x, y]) => s >= x && s < y)) pick = nx;
+    }
     if (pick >= 0 && (!caps.length || onsets[pick] > caps[caps.length - 1].s + 0.3)) { s = onsets[pick]; used = pick; }
     const text = line.join(' ');
-    caps.push({ s, e: 0, text: HG.isDev(text) ? HG.romanize(text) : text });
+    caps.push({ s, e: 0, text: roman && HG.isDev(text) ? HG.romanize(text) : text });
     w += line.length;
   }
   for (let i = 0; i < caps.length; i++) caps[i].e = i + 1 < caps.length ? Math.max(caps[i].s + 0.3, caps[i + 1].s - 0.05) : t1;
