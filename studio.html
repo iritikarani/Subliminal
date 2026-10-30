@@ -2470,7 +2470,7 @@ let scriptTimer = 0;
 function scriptChanged() {
   clearTimeout(scriptTimer);
   scriptTimer = setTimeout(() => {
-    if (!media.voiceBase || (capBusy && !useScript())) return;
+    if (!media.voiceBase) return; // always rebuild: in My voice, script lines must never linger while the words are written out
     buildCaptions(); renderCapList(); refreshOutputs();
     if (!capBusy) {
       const n = media.captions ? media.captions.length : 0;
